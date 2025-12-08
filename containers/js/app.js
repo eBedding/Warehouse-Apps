@@ -35,6 +35,7 @@ window.CartonApp.MainApp = function () {
       h: 200,
       qty: 10,
       weight: 10.0,
+      innersPerBox: 0,
       color: "#4a9eff",
     },
   ]);
@@ -48,10 +49,10 @@ window.CartonApp.MainApp = function () {
   const [containers, setContainers] = useState([
     {
       id: Date.now(),
-      type: "20ft Container (6058 × 2438 mm x 2591mm)",
-      L: 6058,
-      W: 2438,
-      H: 2591,
+      type: "20' Standard (5895 × 2350 mm x 2392mm)",
+      L: 5895,
+      W: 2350,
+      H: 2392,
       weightLimit: 28000,
       allowedGroups: [], // Empty array = allow all groups (default behavior)
     },
@@ -60,6 +61,16 @@ window.CartonApp.MainApp = function () {
   const [spreadAcrossContainers, setSpreadAcrossContainers] = useState(false);
   const [isRecommending, setIsRecommending] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Import modal state
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importJsonText, setImportJsonText] = useState("");
+  const [importError, setImportError] = useState("");
+
+  // Export modal state
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportJsonText, setExportJsonText] = useState("");
+  const [exportCopied, setExportCopied] = useState(false);
 
   const multiMode =
     Array.isArray(cartonGroups) &&
@@ -204,6 +215,7 @@ window.CartonApp.MainApp = function () {
         h: 200,
         qty: 10,
         weight: 10.0,
+        innersPerBox: 0,
         color: GROUP_COLORS[newIndex % GROUP_COLORS.length],
       },
     ]);
@@ -231,10 +243,10 @@ window.CartonApp.MainApp = function () {
   function addContainer() {
     const newContainer = {
       id: Date.now(),
-      type: "20ft Container (6058 × 2438 mm x 2591mm)",
-      L: 6058,
-      W: 2438,
-      H: 2591,
+      type: "20' Standard (5895 × 2350 mm x 2392mm)",
+      L: 5895,
+      W: 2350,
+      H: 2392,
       weightLimit: 28000,
       allowedGroups: [], // Empty array = allow all groups (default behavior)
     };
@@ -306,6 +318,284 @@ window.CartonApp.MainApp = function () {
       }
       setIsRecommending(false);
     }, 50);
+  }
+
+  function handleExportSpreadsheet() {
+    if (!multiContainerPacking || multiContainerPacking.length === 0) return;
+
+    // CSV header
+    const headers = [
+      "Containers",
+      "Cubic Volume Used (m3)",
+      "CBM %",
+      "Total Cartons",
+      "Total Inners",
+      "Groups",
+      "Length (mm)",
+      "Width (mm)",
+      "Height (mm)",
+      "Quantity",
+      "Weight (kg)",
+      "Inners per box"
+    ];
+
+    const rows = [headers.join(",")];
+
+    // Process each container
+    multiContainerPacking.forEach((packResult, containerIndex) => {
+      const container = containers[containerIndex];
+      if (!container) return;
+
+      // Calculate container stats
+      const containerVolume = (container.L * container.W * container.H) / 1e9; // Convert mm³ to m³
+      const usedVolume = packResult.groups
+        ? packResult.groups.reduce((sum, g) => {
+            const groupVolume = (g.l * g.w * g.h * (g.placedQty || 0)) / 1e9;
+            return sum + groupVolume;
+          }, 0)
+        : 0;
+      const cbmPercent = containerVolume > 0 ? ((usedVolume / containerVolume) * 100).toFixed(2) : 0;
+      const totalCartons = packResult.totalCartons || 0;
+      const totalInners = packResult.groups
+        ? packResult.groups.reduce((sum, packGroup) => {
+            const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+            const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+            return sum + ((packGroup.placedQty || 0) * innersPerBox);
+          }, 0)
+        : 0;
+
+      // Get container name from type
+      const containerName = container.type || `Container ${containerIndex + 1}`;
+
+      // Get groups in this container
+      const groupsInContainer = packResult.groups || [];
+
+      if (groupsInContainer.length === 0) {
+        // Container with no groups
+        rows.push([
+          `"${containerName}"`,
+          usedVolume.toFixed(2),
+          `${cbmPercent}%`,
+          totalCartons,
+          totalInners,
+          "",
+          "",
+          "",
+          "",
+          "",
+          "",
+          ""
+        ].join(","));
+      } else {
+        // Filter out groups with 0 placed quantity
+        const nonZeroGroups = groupsInContainer.filter(g => (g.placedQty || 0) > 0);
+
+        if (nonZeroGroups.length === 0) {
+          // Container has groups but all have 0 quantity - show container row only
+          rows.push([
+            `"${containerName}"`,
+            usedVolume.toFixed(2),
+            `${cbmPercent}%`,
+            totalCartons,
+            totalInners,
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            ""
+          ].join(","));
+        } else {
+          // First group row includes container info
+          nonZeroGroups.forEach((packGroup, groupIndex) => {
+            const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+            const groupName = originalGroup ? originalGroup.name : `Group ${groupIndex + 1}`;
+            const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+            const weight = originalGroup ? (originalGroup.weight || 0) : 0;
+
+            if (groupIndex === 0) {
+              // First row: include container info
+              rows.push([
+                `"${containerName}"`,
+                usedVolume.toFixed(2),
+                `${cbmPercent}%`,
+                totalCartons,
+                totalInners,
+                `"${groupName}"`,
+                packGroup.l || 0,
+                packGroup.w || 0,
+                packGroup.h || 0,
+                packGroup.placedQty || 0,
+                weight,
+                innersPerBox
+              ].join(","));
+            } else {
+              // Subsequent rows: leave container columns empty
+              rows.push([
+                "",
+                "",
+                "",
+                "",
+                "",
+                `"${groupName}"`,
+                packGroup.l || 0,
+                packGroup.w || 0,
+                packGroup.h || 0,
+                packGroup.placedQty || 0,
+                weight,
+                innersPerBox
+              ].join(","));
+            }
+          });
+        }
+      }
+    });
+
+    // Create and download CSV
+    const csvContent = "\uFEFF" + rows.join("\n"); // BOM for Excel UTF-8 compatibility
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `container-packing-${new Date().toISOString().split("T")[0]}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleExportJSON() {
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      version: "1.0",
+      groups: cartonGroups.map(g => ({
+        name: g.name,
+        dimensions: {
+          length: g.l,
+          width: g.w,
+          height: g.h
+        },
+        quantity: g.qty,
+        weight: g.weight,
+        innersPerBox: g.innersPerBox || 0,
+        color: g.color
+      })),
+      containers: containers.map(c => ({
+        type: c.type,
+        dimensions: {
+          length: c.L,
+          width: c.W,
+          height: c.H
+        },
+        weightLimit: c.weightLimit,
+        restrictedToGroups: c.allowedGroups && c.allowedGroups.length > 0
+          ? c.allowedGroups.map(groupId => {
+              const group = cartonGroups.find(g => g.id === groupId);
+              return group ? group.name : null;
+            }).filter(Boolean)
+          : [] // Empty array means all groups allowed
+      })),
+      settings: {
+        allowVerticalFlip: allowVerticalFlip,
+        spreadAcrossContainers: spreadAcrossContainers
+      }
+    };
+
+    const jsonContent = JSON.stringify(exportData, null, 2);
+    setExportJsonText(jsonContent);
+    setExportCopied(false);
+    setShowExportModal(true);
+  }
+
+  function handleCopyExport() {
+    navigator.clipboard.writeText(exportJsonText).then(() => {
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 2000);
+    });
+  }
+
+  function handleImportJSON() {
+    setImportError("");
+
+    if (!importJsonText.trim()) {
+      setImportError("Please paste JSON configuration data.");
+      return;
+    }
+
+    try {
+      const data = JSON.parse(importJsonText);
+
+      // Validate structure
+      if (!data.groups || !Array.isArray(data.groups)) {
+        setImportError("Invalid format: missing 'groups' array.");
+        return;
+      }
+      if (!data.containers || !Array.isArray(data.containers)) {
+        setImportError("Invalid format: missing 'containers' array.");
+        return;
+      }
+
+      // Import groups
+      const newGroups = data.groups.map((g, index) => ({
+        id: Date.now() + index,
+        name: g.name || `Group ${index + 1}`,
+        l: g.dimensions?.length || 300,
+        w: g.dimensions?.width || 300,
+        h: g.dimensions?.height || 200,
+        qty: g.quantity || 0,
+        weight: g.weight || 0,
+        innersPerBox: g.innersPerBox || 0,
+        color: g.color || GROUP_COLORS[index % GROUP_COLORS.length],
+      }));
+
+      // Import containers (need to map group names to new IDs)
+      const newContainers = data.containers.map((c, index) => {
+        // Map group names back to IDs
+        let allowedGroups = [];
+        if (c.restrictedToGroups && Array.isArray(c.restrictedToGroups) && c.restrictedToGroups.length > 0) {
+          allowedGroups = c.restrictedToGroups
+            .map(groupName => {
+              const groupIndex = newGroups.findIndex(g => g.name === groupName);
+              return groupIndex >= 0 ? newGroups[groupIndex].id : null;
+            })
+            .filter(id => id !== null);
+        }
+
+        return {
+          id: Date.now() + 1000 + index,
+          type: c.type || "20' Standard (5895 × 2350 mm x 2392mm)",
+          L: c.dimensions?.length || 5895,
+          W: c.dimensions?.width || 2350,
+          H: c.dimensions?.height || 2392,
+          weightLimit: c.weightLimit || 28000,
+          allowedGroups: allowedGroups,
+        };
+      });
+
+      // Import settings
+      if (data.settings) {
+        if (typeof data.settings.allowVerticalFlip === "boolean") {
+          setAllowVerticalFlip(data.settings.allowVerticalFlip);
+        }
+        if (typeof data.settings.spreadAcrossContainers === "boolean") {
+          setSpreadAcrossContainers(data.settings.spreadAcrossContainers);
+        }
+      }
+
+      // Apply imported data
+      setCartonGroups(newGroups);
+      setContainers(newContainers);
+      setActiveContainerIndex(0);
+
+      // Close modal and reset
+      setShowImportModal(false);
+      setImportJsonText("");
+      setImportError("");
+
+    } catch (e) {
+      setImportError(`Parse error: ${e.message}`);
+    }
   }
 
   // -------------------------------------------------
@@ -474,10 +764,10 @@ window.CartonApp.MainApp = function () {
                 )
               ),
 
-              // Quantity and Weight row
+              // Quantity, Weight, and Inners row
               React.createElement(
                 "div",
-                { className: "grid grid-cols-2 gap-2" },
+                { className: "grid grid-cols-3 gap-2" },
                 React.createElement(
                   "label",
                   { className: "text-xs text-gray-700" },
@@ -502,6 +792,19 @@ window.CartonApp.MainApp = function () {
                     value: g.weight || 0,
                     onChange: (e) =>
                       updateGroup(g.id, "weight", Number(e.target.value)),
+                    className: "border rounded px-2 py-1 w-full text-sm",
+                  })
+                ),
+                React.createElement(
+                  "label",
+                  { className: "text-xs text-gray-700" },
+                  "Inners per box",
+                  React.createElement("input", {
+                    type: "number",
+                    min: 0,
+                    value: g.innersPerBox || 0,
+                    onChange: (e) =>
+                      updateGroup(g.id, "innersPerBox", Number(e.target.value)),
                     className: "border rounded px-2 py-1 w-full text-sm",
                   })
                 )
@@ -907,23 +1210,89 @@ window.CartonApp.MainApp = function () {
           palletTile,
           cartonWeight,
           effectiveCartons,
-          multiTile: isMultiActive ? multiPack : null, // NEW
+          multiTile: isMultiActive ? multiPack : null,
           activeContainerIndex: activeContainerIndex,
           totalContainers: containers.length,
           onContainerChange: setActiveContainerIndex,
+          totalInners: isMultiActive && multiPack && multiPack.groups
+            ? multiPack.groups.reduce((total, packGroup) => {
+                const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+                const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+                const placedQty = packGroup.placedQty || 0;
+                return total + (placedQty * innersPerBox);
+              }, 0)
+            : 0,
         }),
 
-        // Flip Info
+        // Export/Import buttons
         React.createElement(
           "div",
-          {
-            className: `text-s mt-1 pl-1 ${
-              allowVerticalFlip ? "text-green-600" : "text-orange-500"
-            }`,
-          },
-          allowVerticalFlip
-            ? "All orientations, including side-laying and flat, will be tested."
-            : "Only upright and horizontal rotations will be considered (no side or flat flips)."
+          { className: "mt-1 pl-1 flex gap-2" },
+          // Export Spreadsheet button
+          React.createElement(
+            "button",
+            {
+              className:
+                "px-4 py-2 bg-teal-500 text-white rounded-lg text-sm font-medium hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2",
+              onClick: handleExportSpreadsheet,
+              disabled: !multiContainerPacking || multiContainerPacking.length === 0,
+            },
+            React.createElement(
+              "svg",
+              { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", {
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "2",
+                d: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+              })
+            ),
+            "Export Spreadsheet"
+          ),
+          // Export JSON button
+          React.createElement(
+            "button",
+            {
+              className:
+                "px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-700 flex items-center gap-2",
+              onClick: handleExportJSON,
+            },
+            React.createElement(
+              "svg",
+              { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", {
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "2",
+                d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+              })
+            ),
+            "Export JSON"
+          ),
+          // Import JSON button
+          React.createElement(
+            "button",
+            {
+              className:
+                "px-4 py-2 bg-purple-500 text-white rounded-lg text-sm font-medium hover:bg-purple-700 flex items-center gap-2",
+              onClick: () => {
+                setImportJsonText("");
+                setImportError("");
+                setShowImportModal(true);
+              },
+            },
+            React.createElement(
+              "svg",
+              { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", {
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "2",
+                d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+              })
+            ),
+            "Import JSON"
+          )
         ),
 
         // Metric Cards
@@ -965,8 +1334,161 @@ window.CartonApp.MainApp = function () {
         React.createElement(window.CartonApp.Components.NotesAndTips)
       )
     )
-    ) // Close main content div
-  );
+    ), // Close Main Content div
+
+    // Import JSON Modal
+    showImportModal && React.createElement(
+      "div",
+      {
+        className: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50",
+        onClick: (e) => {
+          if (e.target === e.currentTarget) setShowImportModal(false);
+        }
+      },
+      React.createElement(
+        "div",
+        { className: "bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4" },
+
+        // Modal header
+        React.createElement(
+          "div",
+          { className: "flex items-center justify-between mb-4" },
+          React.createElement(
+            "h3",
+            { className: "text-lg font-semibold" },
+            "Import JSON Configuration"
+          ),
+          React.createElement(
+            "button",
+            {
+              className: "text-gray-500 hover:text-gray-700 text-xl font-bold",
+              onClick: () => setShowImportModal(false)
+            },
+            "×"
+          )
+        ),
+
+        // Instructions
+        React.createElement(
+          "p",
+          { className: "text-sm text-gray-600 mb-3" },
+          "Paste your previously exported JSON configuration below:"
+        ),
+
+        // Textarea for JSON input
+        React.createElement("textarea", {
+          className: "w-full h-48 border rounded-lg p-3 text-sm font-mono resize-none focus:ring-2 focus:ring-purple-500 focus:border-purple-500",
+          placeholder: '{\n  "groups": [...],\n  "containers": [...],\n  "settings": {...}\n}',
+          value: importJsonText,
+          onChange: (e) => {
+            setImportJsonText(e.target.value);
+            setImportError("");
+          }
+        }),
+
+        // Error message
+        importError && React.createElement(
+          "div",
+          { className: "mt-2 text-sm text-red-600" },
+          importError
+        ),
+
+        // Buttons
+        React.createElement(
+          "div",
+          { className: "flex justify-end gap-2 mt-4" },
+          React.createElement(
+            "button",
+            {
+              className: "px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium",
+              onClick: () => setShowImportModal(false)
+            },
+            "Cancel"
+          ),
+          React.createElement(
+            "button",
+            {
+              className: "px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-medium hover:bg-purple-700 disabled:opacity-50",
+              onClick: handleImportJSON,
+              disabled: !importJsonText.trim()
+            },
+            "Import"
+          )
+        )
+      )
+    ),
+
+    // Export JSON Modal
+    showExportModal && React.createElement(
+      "div",
+      {
+        className: "fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50",
+        onClick: (e) => {
+          if (e.target === e.currentTarget) setShowExportModal(false);
+        }
+      },
+      React.createElement(
+        "div",
+        { className: "bg-white rounded-2xl shadow-xl p-6 w-full max-w-lg mx-4" },
+
+        // Modal header
+        React.createElement(
+          "div",
+          { className: "flex items-center justify-between mb-4" },
+          React.createElement(
+            "h3",
+            { className: "text-lg font-semibold" },
+            "Export JSON Configuration"
+          ),
+          React.createElement(
+            "button",
+            {
+              className: "text-gray-500 hover:text-gray-700 text-xl font-bold",
+              onClick: () => setShowExportModal(false)
+            },
+            "×"
+          )
+        ),
+
+        // Instructions
+        React.createElement(
+          "p",
+          { className: "text-sm text-gray-600 mb-3" },
+          "Copy the JSON configuration below:"
+        ),
+
+        // Textarea with JSON (readonly)
+        React.createElement("textarea", {
+          className: "w-full h-48 border rounded-lg p-3 text-sm font-mono resize-none bg-gray-50",
+          value: exportJsonText,
+          readOnly: true,
+          onClick: (e) => e.target.select()
+        }),
+
+        // Buttons
+        React.createElement(
+          "div",
+          { className: "flex justify-end gap-2 mt-4" },
+          React.createElement(
+            "button",
+            {
+              className: "px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium",
+              onClick: () => setShowExportModal(false)
+            },
+            "Close"
+          ),
+          React.createElement(
+            "button",
+            {
+              className: `px-4 py-2 ${exportCopied ? "bg-green-600" : "bg-blue-600"} text-white rounded-lg text-sm font-medium hover:${exportCopied ? "bg-green-700" : "bg-blue-700"}`,
+              onClick: handleCopyExport
+            },
+            exportCopied ? "Copied!" : "Copy to Clipboard"
+          )
+        )
+      )
+    )
+  ); // Close root div
 };
 
 // -----------------------------------------------

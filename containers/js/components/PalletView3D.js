@@ -114,6 +114,7 @@ window.CartonApp.Components.PalletView3D = function ({
   activeContainerIndex, // Index of current container being viewed
   totalContainers, // Total number of containers
   onContainerChange, // Callback to change active container
+  totalInners, // Total inners in container (sum of placedQty * innersPerBox for all groups)
 }) {
   const mountRef = React.useRef(null);
   const sceneRef = React.useRef(null);
@@ -642,12 +643,12 @@ window.CartonApp.Components.PalletView3D = function ({
           " kg",
           palletGrossMax ? ` (max: ${palletGrossMax.toFixed(0)} kg)` : ""
         ),
-                React.createElement(
+        React.createElement(
           "div",
           null,
-          React.createElement("span", { className: "text-gray-500" }, "Stack height:"),
+          React.createElement("span", { className: "text-gray-500" }, "Total inners:"),
           " ",
-          isMulti ? "varies" : `${stackHeight} mm`
+          totalInners > 0 ? totalInners.toLocaleString() : "—"
         ),
       ),
       React.createElement(
@@ -661,14 +662,13 @@ window.CartonApp.Components.PalletView3D = function ({
           surfaceUsage.toFixed(1),
           "%"
         ),
-             React.createElement(
+        React.createElement(
           "div",
           null,
           React.createElement("span", { className: "text-gray-500" }, "Layers:"),
           " ",
           isMulti ? "multi" : displayLayers
-        ),
-       
+        )
       )
     )
   );
