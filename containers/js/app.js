@@ -598,6 +598,46 @@ window.CartonApp.MainApp = function () {
     }
   }
 
+  // Helper function to generate JSON config string (used by export and report problem)
+  function getJsonConfigString() {
+    const exportData = {
+      exportDate: new Date().toISOString(),
+      version: "1.0",
+      groups: cartonGroups.map(g => ({
+        name: g.name,
+        dimensions: {
+          length: g.l,
+          width: g.w,
+          height: g.h
+        },
+        quantity: g.qty,
+        weight: g.weight,
+        innersPerBox: g.innersPerBox || 0,
+        color: g.color
+      })),
+      containers: containers.map(c => ({
+        type: c.type,
+        dimensions: {
+          length: c.L,
+          width: c.W,
+          height: c.H
+        },
+        weightLimit: c.weightLimit,
+        restrictedToGroups: c.allowedGroups && c.allowedGroups.length > 0
+          ? c.allowedGroups.map(groupId => {
+              const group = cartonGroups.find(g => g.id === groupId);
+              return group ? group.name : null;
+            }).filter(Boolean)
+          : []
+      })),
+      settings: {
+        allowVerticalFlip: allowVerticalFlip,
+        spreadAcrossContainers: spreadAcrossContainers
+      }
+    };
+    return JSON.stringify(exportData, null, 2);
+  }
+
   // -------------------------------------------------
   // RENDER
   // -------------------------------------------------
@@ -628,7 +668,7 @@ window.CartonApp.MainApp = function () {
           // Nav Links
           React.createElement(
             "div",
-            { className: "flex items-center gap-1" },
+            { className: "flex items-center gap-2" },
             React.createElement(
               "a",
               {
@@ -644,7 +684,15 @@ window.CartonApp.MainApp = function () {
                 className: "px-4 py-2 rounded-lg text-sm font-medium bg-teal-500 hover:bg-teal-600 transition-colors"
               },
               "Containers"
-            )
+            ),
+            // Divider
+            React.createElement("div", {
+              className: "h-6 w-px bg-teal-500 mx-2"
+            }),
+            // Report Problem button
+            React.createElement(window.CartonApp.Components.ReportProblem, {
+              getJsonConfig: getJsonConfigString
+            })
           )
         )
       )

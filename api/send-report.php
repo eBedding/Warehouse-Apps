@@ -72,11 +72,18 @@ if (!$input) {
 $email = filter_var($input['email'] ?? '', FILTER_VALIDATE_EMAIL);
 $description = trim($input['description'] ?? '');
 $url = $input['url'] ?? '';
+$jsonConfig = $input['jsonConfig'] ?? '';
+$source = $input['source'] ?? 'pallets'; // 'pallets' or 'containers'
 $challenge = strtoupper(preg_replace('/\s+/', '', $input['challenge'] ?? ''));
 
 // Sanitize description (limit length, strip dangerous content)
 $description = substr($description, 0, 2000);
 $description = htmlspecialchars($description, ENT_QUOTES, 'UTF-8');
+
+// Sanitize JSON config (limit length)
+if ($jsonConfig) {
+    $jsonConfig = substr($jsonConfig, 0, 50000); // Allow up to 50KB for JSON config
+}
 
 // Validate URL belongs to your domain
 if ($url && !preg_match('/^https?:\/\/(tools\.)?e-bedding\.co\.uk/i', $url)) {
@@ -100,11 +107,22 @@ if ($challenge !== 'SK91AX') {
 $requests[] = $now;
 file_put_contents($rateLimitFile, json_encode($requests));
 
+// Determine tool name based on source
+$toolName = ($source === 'containers') ? 'Container Tool' : 'Pallet Tool';
+
 // Build email body
-$body = "Problem Report\n";
-$body .= "==============\n\n";
+$body = "Problem Report - {$toolName}\n";
+$body .= str_repeat("=", 30) . "\n\n";
 $body .= "From: {$email}\n\n";
-$body .= "URL: " . ($url ?: '(not provided)') . "\n\n";
+
+if ($source === 'containers' && $jsonConfig) {
+    $body .= "JSON Configuration:\n";
+    $body .= "-------------------\n";
+    $body .= $jsonConfig . "\n\n";
+} else {
+    $body .= "URL: " . ($url ?: '(not provided)') . "\n\n";
+}
+
 $body .= "Description:\n" . ($description ?: '(No description provided)') . "\n\n";
 $body .= "Submitted: " . date('Y-m-d H:i:s T') . "\n";
 
@@ -114,10 +132,10 @@ $mailgunKey = MAILGUN_API_KEY;
 $mailgunEndpoint = "https://api.eu.mailgun.net/v3/{$mailgunDomain}/messages";
 
 $postData = [
-    'from' => "Pallet Tool <noreply@{$mailgunDomain}>",
+    'from' => "{$toolName} <noreply@{$mailgunDomain}>",
     'to' => MAILGUN_TO_EMAIL,
     'reply-to' => $email,
-    'subject' => 'Pallet Tool - Problem Report',
+    'subject' => "{$toolName} - Problem Report",
     'text' => $body,
 ];
 
