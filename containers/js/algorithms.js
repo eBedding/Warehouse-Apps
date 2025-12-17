@@ -213,8 +213,11 @@ window.CartonApp.Algorithms = {
                 ? window.CartonApp.Constants.GROUP_COLORS[index % window.CartonApp.Constants.GROUP_COLORS.length]
                 : "#4a9eff");
 
+            // Use per-group allowVerticalFlip if defined, otherwise fall back to global setting
+            const groupAllowVerticalFlip = g.allowVerticalFlip !== undefined ? g.allowVerticalFlip : allowVerticalFlip;
+
             const orientations = window.CartonApp.Algorithms.generateOrientationsWithStability(
-                l, w, h, allowVerticalFlip
+                l, w, h, groupAllowVerticalFlip
             );
 
             const validOrientations = orientations.filter(o =>

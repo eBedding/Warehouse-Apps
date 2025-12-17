@@ -37,6 +37,7 @@ window.CartonApp.MainApp = function () {
       weight: 10.0,
       innersPerBox: 0,
       color: "#4a9eff",
+      allowVerticalFlip: true, // Allow cartons to be laid on their side
     },
   ]);
 
@@ -217,6 +218,7 @@ window.CartonApp.MainApp = function () {
         weight: 10.0,
         innersPerBox: 0,
         color: GROUP_COLORS[newIndex % GROUP_COLORS.length],
+        allowVerticalFlip: true,
       },
     ]);
   }
@@ -225,9 +227,19 @@ window.CartonApp.MainApp = function () {
     setIsProcessing(true);
     setTimeout(() => {
       setCartonGroups((groups) =>
-        groups.map((g) =>
-          g.id === id ? { ...g, [field]: field === "name" ? value : Number(value) } : g
-        )
+        groups.map((g) => {
+          if (g.id !== id) return g;
+          // Handle different field types
+          let newValue = value;
+          if (field === "name") {
+            newValue = value; // Keep as string
+          } else if (field === "allowVerticalFlip") {
+            newValue = Boolean(value); // Keep as boolean
+          } else {
+            newValue = Number(value); // Convert to number
+          }
+          return { ...g, [field]: newValue };
+        })
       );
       setIsProcessing(false);
     }, 10);
@@ -479,7 +491,8 @@ window.CartonApp.MainApp = function () {
         quantity: g.qty,
         weight: g.weight,
         innersPerBox: g.innersPerBox || 0,
-        color: g.color
+        color: g.color,
+        allowVerticalFlip: g.allowVerticalFlip !== false
       })),
       containers: containers.map(c => ({
         type: c.type,
@@ -547,6 +560,7 @@ window.CartonApp.MainApp = function () {
         weight: g.weight || 0,
         innersPerBox: g.innersPerBox || 0,
         color: g.color || GROUP_COLORS[index % GROUP_COLORS.length],
+        allowVerticalFlip: g.allowVerticalFlip !== false, // Default to true if not specified
       }));
 
       // Import containers (need to map group names to new IDs)
@@ -613,7 +627,8 @@ window.CartonApp.MainApp = function () {
         quantity: g.qty,
         weight: g.weight,
         innersPerBox: g.innersPerBox || 0,
-        color: g.color
+        color: g.color,
+        allowVerticalFlip: g.allowVerticalFlip !== false
       })),
       containers: containers.map(c => ({
         type: c.type,
@@ -904,6 +919,24 @@ window.CartonApp.MainApp = function () {
                       updateGroup(g.id, "innersPerBox", Number(e.target.value)),
                     className: "border rounded px-2 py-1 w-full text-sm",
                   })
+                )
+              ),
+
+              // Allow vertical flip checkbox
+              React.createElement(
+                "label",
+                { className: "flex items-center gap-2 text-xs text-gray-700 mt-2 cursor-pointer" },
+                React.createElement("input", {
+                  type: "checkbox",
+                  checked: g.allowVerticalFlip !== false, // Default to true if undefined
+                  onChange: (e) =>
+                    updateGroup(g.id, "allowVerticalFlip", e.target.checked),
+                  className: "w-3.5 h-3.5 cursor-pointer",
+                }),
+                React.createElement(
+                  "span",
+                  { className: g.allowVerticalFlip !== false ? "text-gray-700" : "text-orange-600" },
+                  "Allow cartons to be laid on their side"
                 )
               )
             )
