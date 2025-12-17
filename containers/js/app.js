@@ -72,6 +72,9 @@ window.CartonApp.MainApp = function () {
   const [exportJsonText, setExportJsonText] = useState("");
   const [exportCopied, setExportCopied] = useState(false);
 
+  // View display mode: 'paginated' shows one container at a time, 'stacked' shows all in a column
+  const [displayMode, setDisplayMode] = useState("paginated");
+
   const multiMode =
     Array.isArray(cartonGroups) &&
     cartonGroups.some((g) => (Number(g.qty) || 0) > 0);
@@ -179,9 +182,6 @@ window.CartonApp.MainApp = function () {
       }
     }
   }
-
-  const totalInnersPerPallet =
-    effectiveCartons * (carton.innersPerCarton || 0);
 
   // Calculate weight based on mode
   let palletWeight = 0;
@@ -705,7 +705,7 @@ window.CartonApp.MainApp = function () {
       // Header
       React.createElement(
         "header",
-        { className: "" },
+        { className: "flex items-center justify-between" },
         React.createElement(
           "div",
           { className: "text-sm text-blue-600" },
@@ -714,6 +714,55 @@ window.CartonApp.MainApp = function () {
           " and weights in ",
           React.createElement("b", {}, "kg"),
           "."
+        ),
+        // Display mode toggle (only show when multiple containers)
+        containers.length > 1 && React.createElement(
+          "div",
+          { className: "flex items-center gap-2 bg-gray-100 rounded-lg p-1" },
+          React.createElement(
+            "button",
+            {
+              onClick: () => setDisplayMode("paginated"),
+              className: `px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5 ${
+                displayMode === "paginated"
+                  ? "bg-white text-gray-900 shadow-sm font-medium"
+                  : "text-gray-600 hover:text-gray-900"
+              }`,
+            },
+            React.createElement(
+              "svg",
+              { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", {
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "2",
+                d: "M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z"
+              })
+            ),
+            "Paginated"
+          ),
+          React.createElement(
+            "button",
+            {
+              onClick: () => setDisplayMode("stacked"),
+              className: `px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-1.5 ${
+                displayMode === "stacked"
+                  ? "bg-white text-gray-900 shadow-sm font-medium"
+                  : "text-gray-600 hover:text-gray-900"
+              }`,
+            },
+            React.createElement(
+              "svg",
+              { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+              React.createElement("path", {
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "2",
+                d: "M4 6h16M4 10h16M4 14h16M4 18h16"
+              })
+            ),
+            "Show All"
+          )
         )
       ),
 
@@ -1243,8 +1292,8 @@ window.CartonApp.MainApp = function () {
         "div",
         { className: "lg:col-span-2 space-y-4" },
 
-        // 3D / 2D Pallet View
-        React.createElement(window.CartonApp.Components.PalletView3D, {
+        // Paginated view (single container at a time)
+        displayMode === "paginated" && React.createElement(window.CartonApp.Components.PalletView3D, {
           palletL: containerLimits.palletL,
           palletW: containerLimits.palletW,
           palletH: containerLimits.palletH,
@@ -1271,6 +1320,152 @@ window.CartonApp.MainApp = function () {
               }, 0)
             : 0,
         }),
+
+        // Stacked view (all containers in a column)
+        displayMode === "stacked" && React.createElement(
+          "div",
+          { className: "space-y-6" },
+          ...containers.map((container, idx) => {
+            const packResult = multiContainerPacking ? multiContainerPacking[idx] : null;
+            const containerWeight = packResult && packResult.groups
+              ? packResult.groups.reduce((total, group) => {
+                  const groupWeight = Number(group.weight) || 0;
+                  const placedQty = Number(group.placedQty) || 0;
+                  return total + (groupWeight * placedQty);
+                }, 0)
+              : 0;
+            const containerInners = packResult && packResult.groups
+              ? packResult.groups.reduce((total, packGroup) => {
+                  const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+                  const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+                  const placedQty = packGroup.placedQty || 0;
+                  return total + (placedQty * innersPerBox);
+                }, 0)
+              : 0;
+
+            return React.createElement(
+              "div",
+              { key: container.id, className: "border-b border-gray-200 pb-6 last:border-b-0" },
+              // Container header
+              React.createElement(
+                "div",
+                { className: "flex items-center justify-between mb-3" },
+                React.createElement(
+                  "h3",
+                  { className: "font-semibold text-lg text-gray-800" },
+                  `Container ${idx + 1}: ${container.type}`
+                ),
+                React.createElement(
+                  "div",
+                  { className: "text-sm text-gray-600" },
+                  `${packResult ? packResult.totalCartons || 0 : 0} cartons • ${containerWeight.toFixed(1)} kg`
+                )
+              ),
+              // Row: 3D View (75%) + Per Container card (25%)
+              React.createElement(
+                "div",
+                { className: "flex gap-4" },
+                // 3D View for this container (75% width)
+                React.createElement(
+                  "div",
+                  { className: "w-3/4" },
+                  React.createElement(window.CartonApp.Components.PalletView3D, {
+                    palletL: container.L,
+                    palletW: container.W,
+                    palletH: container.H,
+                    cartonL: palletTile.boxL,
+                    cartonW: palletTile.boxW,
+                    cartonH: palletTile.boxH,
+                    pattern: palletTile.pattern,
+                    perLayer: palletTile.perLayer,
+                    layers: packResult ? packResult.totalLayers || 0 : 0,
+                    patternRows: palletTile.patternRows,
+                    palletTile,
+                    cartonWeight,
+                    effectiveCartons: packResult ? packResult.totalCartons || 0 : 0,
+                    multiTile: packResult || null,
+                    activeContainerIndex: idx,
+                    totalContainers: 1, // Hide pagination in stacked view
+                    onContainerChange: () => {},
+                    totalInners: containerInners,
+                  })
+                ),
+                // Per Container card (25% width, smaller text)
+                React.createElement(
+                  "div",
+                  { className: "w-1/4 p-3 border rounded-2xl shadow-sm bg-white self-start" },
+                  React.createElement("h4", { className: "font-semibold text-sm mb-1" }, "Per Container"),
+                  React.createElement(
+                    "div",
+                    { className: "text-xs text-gray-600 mb-2" },
+                    packResult
+                      ? `${packResult.totalCartons || 0} cartons, ${packResult.totalLayers || 0} layer${(packResult.totalLayers || 0) === 1 ? "" : "s"}`
+                      : "No cartons"
+                  ),
+                  React.createElement(
+                    "div",
+                    { className: "text-lg font-bold" },
+                    `${packResult ? packResult.totalCartons || 0 : 0} cartons`
+                  ),
+                  // Group-by-group inners breakdown
+                  packResult && packResult.groups && React.createElement(
+                    "div",
+                    { className: "mt-2 pt-2 border-t border-gray-100" },
+                    React.createElement("div", { className: "text-xs font-medium text-gray-500 mb-1" }, "Inners per group:"),
+                    React.createElement(
+                      "div",
+                      { className: "space-y-0.5" },
+                      ...packResult.groups
+                        .filter(packGroup => (packGroup.placedQty || 0) > 0)
+                        .map(packGroup => {
+                          const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+                          const groupName = originalGroup ? originalGroup.name : "Unknown";
+                          const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+                          const placedQty = packGroup.placedQty || 0;
+                          const totalInners = placedQty * innersPerBox;
+                          const groupColor = originalGroup ? originalGroup.color : "#999";
+
+                          return React.createElement(
+                            "div",
+                            { key: packGroup.id, className: "flex items-center justify-between text-xs" },
+                            React.createElement(
+                              "div",
+                              { className: "flex items-center gap-1" },
+                              React.createElement("div", {
+                                className: "w-2 h-2 rounded-sm",
+                                style: { backgroundColor: groupColor }
+                              }),
+                              React.createElement("span", { className: "text-gray-700 truncate max-w-[60px]" }, groupName)
+                            ),
+                            React.createElement(
+                              "span",
+                              { className: "font-medium text-xs" },
+                              innersPerBox > 0
+                                ? `${placedQty}×${innersPerBox}=${totalInners.toLocaleString()}`
+                                : `${placedQty}`
+                            )
+                          );
+                        })
+                    ),
+                    // Total inners for this container
+                    React.createElement(
+                      "div",
+                      { className: "flex justify-between text-xs font-semibold mt-1 pt-1 border-t border-gray-100" },
+                      React.createElement("span", null, "Total:"),
+                      React.createElement("span", null, containerInners.toLocaleString())
+                    )
+                  ),
+                  // Weight footer
+                  React.createElement(
+                    "div",
+                    { className: `text-xs mt-2 ${containerWeight > container.weightLimit ? "text-red-600 font-semibold" : "text-gray-600"}` },
+                    `${containerWeight.toFixed(1)} kg${containerWeight > container.weightLimit ? " ⚠️" : ""}`
+                  )
+                )
+              )
+            );
+          })
+        ),
 
         // Export/Import buttons
         React.createElement(
@@ -1343,28 +1538,92 @@ window.CartonApp.MainApp = function () {
           )
         ),
 
-        // Metric Cards
-        React.createElement(
+        // Metric Cards (only in paginated mode)
+        displayMode === "paginated" && React.createElement(
           "section",
           { className: "grid md:grid-cols-2 gap-4" },
 
-          // Per pallet card
-          React.createElement(MetricCard, {
-            title: "Per Container",
-            subtitle: isMultiActive
-              ? `Multi-group: ${cartonsPerPallet} cartons across ${palletLayers} layer${
-                  palletLayers === 1 ? "" : "s"
-                }`
-              : `${palletTile.perLayer} cartons/layer × ${palletLayers} layers`,
-            value: `${numberFmt(
-              effectiveCartons
-            )} cartons with ${totalInnersPerPallet}`,
-            unit: "inner products",
-            footer: `${palletWeight.toFixed(1)} kg total ${
-              palletOverweight ? ` ⚠️ OVER LIMIT (remove ${(palletWeight - containerLimits.palletGrossMax).toFixed(1)} kg)` : ""
-            }`,
-            error: palletOverweight,
-          }),
+          // Per Container card with group breakdown
+          React.createElement(
+            "div",
+            { className: "p-4 border rounded-2xl shadow-sm bg-white" },
+            React.createElement("h4", { className: "font-semibold mb-1" }, "Per Container"),
+            React.createElement(
+              "div",
+              { className: "text-sm text-gray-600 mb-2" },
+              isMultiActive
+                ? `Multi-group: ${cartonsPerPallet} cartons across ${palletLayers} layer${palletLayers === 1 ? "" : "s"}`
+                : `${palletTile.perLayer} cartons/layer × ${palletLayers} layers`
+            ),
+            React.createElement(
+              "div",
+              { className: "text-xl font-bold" },
+              `${numberFmt(effectiveCartons)} cartons`
+            ),
+            // Group-by-group inners breakdown
+            isMultiActive && multiPack && multiPack.groups && React.createElement(
+              "div",
+              { className: "mt-3 pt-3 border-t border-gray-100" },
+              React.createElement("div", { className: "text-xs font-medium text-gray-500 mb-2" }, "Inners per group:"),
+              React.createElement(
+                "div",
+                { className: "space-y-1" },
+                ...multiPack.groups
+                  .filter(packGroup => (packGroup.placedQty || 0) > 0)
+                  .map(packGroup => {
+                    const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+                    const groupName = originalGroup ? originalGroup.name : "Unknown";
+                    const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+                    const placedQty = packGroup.placedQty || 0;
+                    const totalInners = placedQty * innersPerBox;
+                    const groupColor = originalGroup ? originalGroup.color : "#999";
+
+                    return React.createElement(
+                      "div",
+                      { key: packGroup.id, className: "flex items-center justify-between text-sm" },
+                      React.createElement(
+                        "div",
+                        { className: "flex items-center gap-2" },
+                        React.createElement("div", {
+                          className: "w-3 h-3 rounded-sm",
+                          style: { backgroundColor: groupColor }
+                        }),
+                        React.createElement("span", { className: "text-gray-700" }, groupName)
+                      ),
+                      React.createElement(
+                        "span",
+                        { className: "font-medium" },
+                        innersPerBox > 0
+                          ? `${placedQty} × ${innersPerBox} = ${totalInners.toLocaleString()}`
+                          : `${placedQty} boxes`
+                      )
+                    );
+                  })
+              ),
+              // Total inners
+              React.createElement(
+                "div",
+                { className: "flex justify-between text-sm font-semibold mt-2 pt-2 border-t border-gray-100" },
+                React.createElement("span", null, "Total inners:"),
+                React.createElement("span", null,
+                  (isMultiActive && multiPack && multiPack.groups
+                    ? multiPack.groups.reduce((total, packGroup) => {
+                        const originalGroup = cartonGroups.find(g => g.id === packGroup.id);
+                        const innersPerBox = originalGroup ? (originalGroup.innersPerBox || 0) : 0;
+                        return total + ((packGroup.placedQty || 0) * innersPerBox);
+                      }, 0)
+                    : 0
+                  ).toLocaleString()
+                )
+              )
+            ),
+            // Weight footer
+            React.createElement(
+              "div",
+              { className: `text-sm mt-3 ${palletOverweight ? "text-red-600 font-semibold" : "text-gray-600"}` },
+              `${palletWeight.toFixed(1)} kg total ${palletOverweight ? ` ⚠️ OVER LIMIT` : ""}`
+            )
+          ),
 
           // Optimization summary
           React.createElement(window.CartonApp.Components.OptimizationDetails, {
