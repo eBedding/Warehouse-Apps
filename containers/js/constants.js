@@ -20,13 +20,16 @@ window.CartonApp.Constants = {
 
   // -------------------------------------------------
   // Common pallet presets
+  // costWeight: relative cost factor (lower = more cost efficient)
+  // Used by recommendContainers to prefer cost-effective combinations
+  // e.g., 1x 40'HC (cost 1.5) is better than 2x 20' (cost 2.0)
   // -------------------------------------------------
   PALLET_SIZES: [
-    { label: "20' Standard (5895 × 2350 mm x 2392mm)", L: 5895, W: 2350, H: 2392, WeightLimit: 28230 },
-    { label: "40' Standard (12029 × 2350 mm x 2392mm)", L: 12029, W: 2350, H: 2392, WeightLimit: 26700 },
-    { label: "40' High Cube (12024 × 2350 mm x 2697mm)", L: 12024, W: 2350, H: 2697, WeightLimit: 26460 },
-    { label: "45' High Cube (13556 × 2352 mm x 2700mm)", L: 13556, W: 2352, H: 2700, WeightLimit: 27700 },
-    { label: "Custom size", L: null, W: null, H: null, WeightLimit: null },
+    { label: "20' Standard (5895 × 2350 mm x 2392mm)", L: 5895, W: 2350, H: 2392, WeightLimit: 28230, costWeight: 1.0 },
+    // { label: "40' Standard (12029 × 2350 mm x 2392mm)", L: 12029, W: 2350, H: 2392, WeightLimit: 26700, costWeight: 1.4 },
+    { label: "40' High Cube (12024 × 2350 mm x 2697mm)", L: 12024, W: 2350, H: 2697, WeightLimit: 26460, costWeight: 1.5 },
+    // { label: "45' High Cube (13556 × 2352 mm x 2700mm)", L: 13556, W: 2352, H: 2700, WeightLimit: 27700, costWeight: 1.8 },
+    { label: "Custom size", L: null, W: null, H: null, WeightLimit: null, costWeight: 1.0 },
   ],
 
   

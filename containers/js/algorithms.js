@@ -986,14 +986,18 @@ window.CartonApp.Algorithms = {
     },
 
     // ------------------------------------------------
-    // Container recommendation (unchanged but uses new packMultipleContainers)
+    // Container recommendation with cost-weight optimization
+    // Prefers cost-efficient combinations:
+    // - 1x 20' if it fits
+    // - 1x 40'HC over 2x 20' (40'HC cost 1.5 < 2x 20' cost 2.0)
+    // - 1x 40'HC + 1x 20' over 2x 40'HC (cost 2.5 < cost 3.0)
     // ------------------------------------------------
     recommendContainers: function recommendContainers(
         groups,
         availableContainerTypes,
         allowVerticalFlip
     ) {
-        console.log('[recommendContainers] Starting...', { groups, availableContainerTypes });
+        console.log('[recommendContainers] Starting with cost optimization...');
 
         if (!Array.isArray(groups) || groups.length === 0) {
             return [];
@@ -1002,7 +1006,6 @@ window.CartonApp.Algorithms = {
         const validTypes = availableContainerTypes.filter(
             t => t.L && t.W && t.H && t.WeightLimit
         );
-        console.log('[recommendContainers] Valid types:', validTypes.length);
 
         if (validTypes.length === 0) {
             return [];
@@ -1012,25 +1015,21 @@ window.CartonApp.Algorithms = {
             (sum, g) => sum + (Number(g.qty) || 0),
             0
         );
-        console.log('[recommendContainers] Total cartons:', totalCartons);
 
         if (totalCartons === 0) {
             return [];
         }
 
-        console.log('[recommendContainers] Testing capacity for each type...');
-        const typeCapacities = validTypes.map((type, idx) => {
-            console.log(`[recommendContainers] Testing type ${idx + 1}/${validTypes.length}: ${type.label}`);
-            const testContainer = [
-                {
-                    id: "test",
-                    type: type.label,
-                    L: type.L,
-                    W: type.W,
-                    H: type.H,
-                    weightLimit: type.WeightLimit
-                }
-            ];
+        // Test capacity for each container type
+        const typeCapacities = validTypes.map(type => {
+            const testContainer = [{
+                id: "test",
+                type: type.label,
+                L: type.L,
+                W: type.W,
+                H: type.H,
+                weightLimit: type.WeightLimit
+            }];
 
             const result = window.CartonApp.Algorithms.packMultipleContainers(
                 groups,
@@ -1038,77 +1037,168 @@ window.CartonApp.Algorithms = {
                 allowVerticalFlip,
                 false
             );
-            const capacity = result[0] ? result[0].totalCartons : 0;
-            console.log(`[recommendContainers] Type ${type.label} capacity: ${capacity}`);
-            const weightCapacity = result[0] ? result[0].totalWeight : 0;
-            const stability = result[0] ? result[0].stability : { score: 0 };
 
             return {
                 type,
-                capacity,
-                weightCapacity,
-                stabilityScore: stability.score || 0
+                capacity: result[0] ? result[0].totalCartons : 0,
+                costWeight: type.costWeight || 1.0
             };
-        });
+        }).filter(t => t.capacity > 0);
 
+        if (typeCapacities.length === 0) {
+            return [];
+        }
+
+        // Sort by capacity (largest first) for efficient searching
         typeCapacities.sort((a, b) => b.capacity - a.capacity);
 
-        let bestConfig = null;
-        let bestScore = -Infinity;
-        const maxCapacity = Math.max(...typeCapacities.map(t => t.capacity || 1));
-        const maxContainersToTry = Math.ceil(totalCartons / maxCapacity) + 2;
+        // Generate candidate configurations
+        const candidates = [];
+        const maxContainers = 4; // Limit search space
 
-        typeCapacities.forEach(typeInfo => {
-            if (typeInfo.capacity === 0) return;
+        // Helper to test a configuration
+        const testConfig = (containerList) => {
+            const result = window.CartonApp.Algorithms.packMultipleContainers(
+                groups,
+                containerList,
+                allowVerticalFlip,
+                false
+            );
 
-            const numNeeded = Math.ceil(totalCartons / typeInfo.capacity);
-            const containers = Array.from(
-                { length: Math.min(numNeeded, maxContainersToTry) },
-                (_, idx) => ({
+            const totalPlaced = result.reduce((sum, r) => sum + (r.totalCartons || 0), 0);
+            const totalCost = containerList.reduce((sum, c) => {
+                const typeInfo = typeCapacities.find(t => t.type.label === c.type);
+                return sum + (typeInfo ? typeInfo.costWeight : 1.0);
+            }, 0);
+
+            return { totalPlaced, totalCost, containers: containerList };
+        };
+
+        // Strategy 1: Single container types (1x, 2x, 3x of same type)
+        for (const typeInfo of typeCapacities) {
+            for (let count = 1; count <= maxContainers; count++) {
+                const containers = Array.from({ length: count }, (_, idx) => ({
                     id: Date.now() + idx,
                     type: typeInfo.type.label,
                     L: typeInfo.type.L,
                     W: typeInfo.type.W,
                     H: typeInfo.type.H,
                     weightLimit: typeInfo.type.WeightLimit
-                })
-            );
+                }));
 
-            const result = window.CartonApp.Algorithms.packMultipleContainers(
-                groups,
-                containers,
-                allowVerticalFlip,
-                false
-            );
-            const totalPlaced = result.reduce(
-                (sum, r) => sum + (r.totalCartons || 0),
-                0
-            );
-            const totalWeightUsed = result.reduce(
-                (sum, r) => sum + (r.totalWeight || 0),
-                0
-            );
-            const avgStability =
-                result.reduce(
-                    (sum, r) => sum + (r.stability && r.stability.score ? r.stability.score : 0),
-                    0
-                ) / (result.length || 1);
-
-            if (
-                totalPlaced >= totalCartons &&
-                totalWeightUsed <= containers.length * typeInfo.type.WeightLimit
-            ) {
-                const utilization = totalPlaced / (containers.length * typeInfo.capacity);
-                const score = utilization * 100 + avgStability * 20 - containers.length;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestConfig = containers;
+                const result = testConfig(containers);
+                if (result.totalPlaced >= totalCartons) {
+                    candidates.push(result);
+                    break; // Found minimum count for this type
                 }
             }
+        }
+
+        // Strategy 2: Mixed combinations (e.g., 1x 40'HC + 1x 20')
+        // Try combinations of different container types
+        for (let i = 0; i < typeCapacities.length; i++) {
+            for (let j = i; j < typeCapacities.length; j++) {
+                const type1 = typeCapacities[i];
+                const type2 = typeCapacities[j];
+
+                // Try 1 of each
+                if (i !== j) {
+                    const containers = [
+                        {
+                            id: Date.now(),
+                            type: type1.type.label,
+                            L: type1.type.L,
+                            W: type1.type.W,
+                            H: type1.type.H,
+                            weightLimit: type1.type.WeightLimit
+                        },
+                        {
+                            id: Date.now() + 1,
+                            type: type2.type.label,
+                            L: type2.type.L,
+                            W: type2.type.W,
+                            H: type2.type.H,
+                            weightLimit: type2.type.WeightLimit
+                        }
+                    ];
+
+                    const result = testConfig(containers);
+                    if (result.totalPlaced >= totalCartons) {
+                        candidates.push(result);
+                    }
+                }
+
+                // Try 1 large + 2 smaller (common: 1x 40'HC + 2x 20')
+                if (i !== j && type1.capacity > type2.capacity) {
+                    const containers = [
+                        {
+                            id: Date.now(),
+                            type: type1.type.label,
+                            L: type1.type.L,
+                            W: type1.type.W,
+                            H: type1.type.H,
+                            weightLimit: type1.type.WeightLimit
+                        },
+                        {
+                            id: Date.now() + 1,
+                            type: type2.type.label,
+                            L: type2.type.L,
+                            W: type2.type.W,
+                            H: type2.type.H,
+                            weightLimit: type2.type.WeightLimit
+                        },
+                        {
+                            id: Date.now() + 2,
+                            type: type2.type.label,
+                            L: type2.type.L,
+                            W: type2.type.W,
+                            H: type2.type.H,
+                            weightLimit: type2.type.WeightLimit
+                        }
+                    ];
+
+                    const result = testConfig(containers);
+                    if (result.totalPlaced >= totalCartons) {
+                        candidates.push(result);
+                    }
+                }
+            }
+        }
+
+        if (candidates.length === 0) {
+            // Fallback: just use largest containers
+            const largest = typeCapacities[0];
+            const numNeeded = Math.ceil(totalCartons / largest.capacity);
+            return Array.from({ length: numNeeded }, (_, idx) => ({
+                id: Date.now() + idx,
+                type: largest.type.label,
+                L: largest.type.L,
+                W: largest.type.W,
+                H: largest.type.H,
+                weightLimit: largest.type.WeightLimit
+            }));
+        }
+
+        // Score candidates: lower cost is better, prefer higher utilization
+        candidates.sort((a, b) => {
+            // Primary: lower total cost
+            const costDiff = a.totalCost - b.totalCost;
+            if (Math.abs(costDiff) > 0.01) return costDiff;
+
+            // Secondary: fewer containers
+            const countDiff = a.containers.length - b.containers.length;
+            if (countDiff !== 0) return countDiff;
+
+            // Tertiary: higher utilization (more cartons placed beyond minimum)
+            return b.totalPlaced - a.totalPlaced;
         });
 
-        return bestConfig || [];
+        console.log('[recommendContainers] Best config:',
+            candidates[0].containers.map(c => c.type).join(' + '),
+            'cost:', candidates[0].totalCost,
+            'placed:', candidates[0].totalPlaced);
+
+        return candidates[0].containers;
     }
 };
 
