@@ -473,24 +473,25 @@ window.CartonApp.Algorithms = {
     },
 
     // ------------------------------------------------
-    // SeaRates-Style Greedy Packing with Heightmap
-    // - Uses heightmap for proper stacking
+    // Group-Sequential Packing with Heightmap
+    // - Packs each group COMPLETELY before moving to the next
+    // - Groups stay together (no interleaving) for real-world loading
+    // - Uses heightmap for proper stacking within each group
     // - Greedy placement: lowest floor first, back-to-front, left-to-right
-    // - Tries ALL 6 ORIENTATIONS for each box at each position
     // ------------------------------------------------
     runMaxRectsPacking: function (groups, palletL, palletW, palletH, config) {
         const startTime = performance.now();
         const placements = [];
 
-        // Sort groups by volume (largest first)
+        // Sort groups by volume (largest first) - pack big boxes first for better space use
         const sortedGroups = [...groups].sort((a, b) => {
             const volA = a.boxL * a.boxW * a.boxH;
             const volB = b.boxL * b.boxW * b.boxH;
             return volB - volA;
         });
 
-        console.log(`[runMaxRectsPacking] Groups sorted by volume:`,
-            sortedGroups.map(g => `${g.boxL}x${g.boxW}x${g.boxH}`));
+        console.log(`[runMaxRectsPacking] Groups sorted by volume (sequential packing):`,
+            sortedGroups.map(g => `${g.name || g.id}: ${g.boxL}x${g.boxW}x${g.boxH} qty=${g.remainingQty}`));
 
         // Generate all 6 orientations for a box (using original dimensions from group)
         const getOrientations = (group) => {
@@ -558,9 +559,6 @@ window.CartonApp.Algorithms = {
             }
         };
 
-        // Helper: check if any group has boxes left
-        const hasRemainingBoxes = () => sortedGroups.some(g => g.remainingQty > 0);
-
         // Collect candidate positions
         const getCandidatePositions = () => {
             const positions = [];
@@ -591,26 +589,37 @@ window.CartonApp.Algorithms = {
             return positions;
         };
 
-        // Main packing loop
-        const maxIterations = 50000;
-        let iterations = 0;
+        // Main packing loop - SEQUENTIAL BY GROUP
+        // Pack each group completely before moving to the next
+        const maxIterationsPerBox = 1000;
+        let totalIterations = 0;
 
-        while (hasRemainingBoxes() && iterations < maxIterations) {
-            iterations++;
+        for (const group of sortedGroups) {
+            if (group.remainingQty <= 0) continue;
 
-            let bestPlacement = null;
-            let bestScore = Infinity;
-            let bestGroup = null;
-            let bestOrient = null;
+            const orientations = getOrientations(group);
+            if (orientations.length === 0) {
+                console.log(`[runMaxRectsPacking] No valid orientations for group ${group.name || group.id}`);
+                continue;
+            }
 
-            const candidates = getCandidatePositions();
+            console.log(`[runMaxRectsPacking] Packing group ${group.name || group.id}: ${group.remainingQty} boxes`);
 
-            // For each group, try ALL orientations at ALL positions
-            for (const group of sortedGroups) {
-                if (group.remainingQty <= 0) continue;
+            // Pack all boxes from this group before moving to next
+            let boxesPlacedThisGroup = 0;
+            let iterationsThisGroup = 0;
 
-                const orientations = getOrientations(group);
+            while (group.remainingQty > 0 && iterationsThisGroup < maxIterationsPerBox * group.remainingQty) {
+                iterationsThisGroup++;
+                totalIterations++;
 
+                let bestPlacement = null;
+                let bestScore = Infinity;
+                let bestOrient = null;
+
+                const candidates = getCandidatePositions();
+
+                // Try ALL orientations at ALL positions for THIS group only
                 for (const orient of orientations) {
                     const boxL = orient.l;
                     const boxW = orient.w;
@@ -622,53 +631,58 @@ window.CartonApp.Algorithms = {
                         const floorH = getFloorHeight(posL, posW, boxL, boxW);
                         if (floorH + boxH > palletH) continue;
 
-                        // Score: prefer low floor, then back, then left
-                        // Bonus for larger boxes
-                        const volumeBonus = (boxL * boxW * boxH) / 1000000;
-                        const score = floorH * 100000 + posL * 100 + posW - volumeBonus * 1000;
+                        // Score: pack from BACK first (low posL), then left (low posW), then up (low floor)
+                        // This fills the back wall floor-to-ceiling before moving forward toward the door
+                        const score = posL * 100000 + posW * 1000 + floorH;
 
                         if (score < bestScore) {
                             bestScore = score;
-                            bestGroup = group;
                             bestOrient = orient;
                             bestPlacement = { posL, posW, floorH };
                         }
                     }
                 }
+
+                // No valid placement found for this group - move to next group
+                if (!bestPlacement || !bestOrient) {
+                    console.log(`[runMaxRectsPacking] No more space for group ${group.name || group.id}, ${group.remainingQty} remaining`);
+                    break;
+                }
+
+                // Place the box
+                const boxL = bestOrient.l;
+                const boxW = bestOrient.w;
+                const boxH = bestOrient.h;
+
+                const placement = {
+                    x: bestPlacement.posL + boxL / 2 - palletL / 2,
+                    y: bestPlacement.floorH + boxH / 2 + 100,
+                    z: bestPlacement.posW + boxW / 2 - palletW / 2,
+                    l: boxL,
+                    w: boxW,
+                    h: boxH,
+                    groupId: group.id,
+                    color: group.color,
+                    orientation: bestOrient.label,
+                    localL: bestPlacement.posL,
+                    localW: bestPlacement.posW,
+                    localH: bestPlacement.floorH,
+                    volume: boxL * boxW * boxH,
+                    weight: group.weight,
+                    support: bestPlacement.floorH === 0 ? 1.0 : 0
+                };
+
+                placements.push(placement);
+                group.placements.push(placement);
+                group.remainingQty--;
+                group.placedCount = (group.placedCount || 0) + 1;
+                boxesPlacedThisGroup++;
+
+                // Update heightmap
+                setFloorHeight(bestPlacement.posL, bestPlacement.posW, boxL, boxW, bestPlacement.floorH + boxH);
             }
 
-            if (!bestPlacement || !bestGroup || !bestOrient) break;
-
-            // Place the box with best orientation
-            const boxL = bestOrient.l;
-            const boxW = bestOrient.w;
-            const boxH = bestOrient.h;
-
-            const placement = {
-                x: bestPlacement.posL + boxL / 2 - palletL / 2,
-                y: bestPlacement.floorH + boxH / 2 + 100,
-                z: bestPlacement.posW + boxW / 2 - palletW / 2,
-                l: boxL,
-                w: boxW,
-                h: boxH,
-                groupId: bestGroup.id,
-                color: bestGroup.color,
-                orientation: bestOrient.label,
-                localL: bestPlacement.posL,
-                localW: bestPlacement.posW,
-                localH: bestPlacement.floorH,
-                volume: boxL * boxW * boxH,
-                weight: bestGroup.weight,
-                support: bestPlacement.floorH === 0 ? 1.0 : 0
-            };
-
-            placements.push(placement);
-            bestGroup.placements.push(placement);
-            bestGroup.remainingQty--;
-            bestGroup.placedCount = (bestGroup.placedCount || 0) + 1;
-
-            // Update heightmap
-            setFloorHeight(bestPlacement.posL, bestPlacement.posW, boxL, boxW, bestPlacement.floorH + boxH);
+            console.log(`[runMaxRectsPacking] Group ${group.name || group.id}: placed ${boxesPlacedThisGroup} boxes`);
         }
 
         // Calculate max height used
@@ -679,7 +693,7 @@ window.CartonApp.Algorithms = {
         }
 
         const elapsed = performance.now() - startTime;
-        console.log(`[runMaxRectsPacking] Done in ${elapsed.toFixed(0)}ms, ${placements.length} placed, ${iterations} iterations`);
+        console.log(`[runMaxRectsPacking] Done in ${elapsed.toFixed(0)}ms, ${placements.length} placed, ${totalIterations} iterations`);
 
         return {
             placements,

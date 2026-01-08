@@ -134,16 +134,36 @@ window.CartonApp.MainApp = function () {
     [carton, containerLimits.palletL, containerLimits.palletW, containerLimits.palletH, allowVerticalFlip]
   );
 
+  // Apply hardcoded margins from constants to get effective container dimensions
+  const effectiveContainers = useMemo(() => {
+    const defaultMargins = DEFAULT_VALUES.margins || { door: 0, ceiling: 0, sides: 0 };
+    const doorMargin = Number(defaultMargins.door) || 0;
+    const ceilingMargin = Number(defaultMargins.ceiling) || 0;
+    const sidesMargin = Number(defaultMargins.sides) || 0;
+
+    return containers.map(c => ({
+      ...c,
+      // Effective dimensions after applying margins
+      L: Math.max(0, c.L - doorMargin),
+      W: Math.max(0, c.W - (sidesMargin * 2)), // Applied to both sides
+      H: Math.max(0, c.H - ceilingMargin),
+      // Keep original dimensions for display
+      originalL: c.L,
+      originalW: c.W,
+      originalH: c.H,
+    }));
+  }, [containers]);
+
   // Multi-container packing: pack groups across all containers
   // NOTE: cartonGroups is intentionally NOT in the dependency array to prevent
   // recalculation on every dimension/quantity/weight change (performance optimization)
   // Recalculation only happens when containers change or user clicks "Recommend Containers"
   const multiContainerPacking = useMemo(
     () =>
-      multiMode && containers.length > 0
-        ? packMultipleContainers(cartonGroups, containers, allowVerticalFlip, spreadAcrossContainers)
+      multiMode && effectiveContainers.length > 0
+        ? packMultipleContainers(cartonGroups, effectiveContainers, allowVerticalFlip, spreadAcrossContainers)
         : null,
-    [multiMode, containers, allowVerticalFlip, spreadAcrossContainers]
+    [multiMode, effectiveContainers, allowVerticalFlip, spreadAcrossContainers]
   );
 
   // Get packing result for the active container
