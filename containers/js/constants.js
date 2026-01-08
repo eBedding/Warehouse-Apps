@@ -35,8 +35,18 @@ window.CartonApp.Constants = {
   
   //-------------------------------------------------
   // Group colors for carton groups
+  // Base colors that get adjusted for each cycle
   // -------------------------------------------------
 
+  BASE_GROUP_COLORS: [
+    "#4a9eff", // blue
+    "#f59e0b", // amber
+    "#10b981", // green
+    "#ef4444", // red
+    "#8b5cf6", // purple
+  ],
+
+  // Legacy array for backwards compatibility (first 5 colors)
   GROUP_COLORS: [
     "#4a9eff", // blue
     "#f59e0b", // amber
@@ -44,6 +54,39 @@ window.CartonApp.Constants = {
     "#ef4444", // red
     "#8b5cf6", // purple
   ],
+
+  // Generate a unique color for any group index
+  // Each cycle adjusts the shade to create distinct but related colors
+  getGroupColor: function(index) {
+    const baseColors = this.BASE_GROUP_COLORS;
+    const baseIndex = index % baseColors.length;
+    const cycle = Math.floor(index / baseColors.length);
+
+    if (cycle === 0) {
+      return baseColors[baseIndex];
+    }
+
+    // Convert hex to HSL, adjust, and convert back
+    const hex = baseColors[baseIndex];
+    const hsl = hexToHSL(hex);
+
+    // Adjust lightness and saturation based on cycle
+    // Alternate between darker and lighter variants
+    if (cycle % 2 === 1) {
+      // Odd cycles: darker, slightly more saturated
+      hsl.l = Math.max(25, hsl.l - (cycle * 8));
+      hsl.s = Math.min(100, hsl.s + 5);
+    } else {
+      // Even cycles: lighter, slightly less saturated
+      hsl.l = Math.min(75, hsl.l + (cycle * 6));
+      hsl.s = Math.max(40, hsl.s - 10);
+    }
+
+    // Also shift hue slightly each cycle to add more variation
+    hsl.h = (hsl.h + (cycle * 15)) % 360;
+
+    return hslToHex(hsl.h, hsl.s, hsl.l);
+  },
 
   // -------------------------------------------------
   // Orientation label mappings for 2D/3D drawing
@@ -81,3 +124,70 @@ window.CartonApp.Constants = {
     palletBaseHeight: 100,
   },
 };
+
+// -------------------------------------------------
+// Color conversion helper functions
+// -------------------------------------------------
+
+function hexToHSL(hex) {
+  // Remove # if present
+  hex = hex.replace(/^#/, '');
+
+  // Parse hex to RGB
+  const r = parseInt(hex.substring(0, 2), 16) / 255;
+  const g = parseInt(hex.substring(2, 4), 16) / 255;
+  const b = parseInt(hex.substring(4, 6), 16) / 255;
+
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+
+  if (max === min) {
+    h = s = 0; // achromatic
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+
+  return {
+    h: Math.round(h * 360),
+    s: Math.round(s * 100),
+    l: Math.round(l * 100)
+  };
+}
+
+function hslToHex(h, s, l) {
+  s /= 100;
+  l /= 100;
+
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+  const m = l - c / 2;
+  let r = 0, g = 0, b = 0;
+
+  if (0 <= h && h < 60) {
+    r = c; g = x; b = 0;
+  } else if (60 <= h && h < 120) {
+    r = x; g = c; b = 0;
+  } else if (120 <= h && h < 180) {
+    r = 0; g = c; b = x;
+  } else if (180 <= h && h < 240) {
+    r = 0; g = x; b = c;
+  } else if (240 <= h && h < 300) {
+    r = x; g = 0; b = c;
+  } else if (300 <= h && h < 360) {
+    r = c; g = 0; b = x;
+  }
+
+  r = Math.round((r + m) * 255);
+  g = Math.round((g + m) * 255);
+  b = Math.round((b + m) * 255);
+
+  return "#" + [r, g, b].map(x => x.toString(16).padStart(2, '0')).join('');
+}

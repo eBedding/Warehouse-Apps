@@ -5,7 +5,7 @@ window.CartonApp = window.CartonApp || {};
 
 window.CartonApp.MainApp = function () {
   const { useState, useMemo } = React;
-  const { DEFAULT_VALUES, PALLET_SIZES, GROUP_COLORS } = window.CartonApp.Constants;
+  const { DEFAULT_VALUES, PALLET_SIZES } = window.CartonApp.Constants;
   const { handleNumberInput, numberFmt } = window.CartonApp.Utils;
   const { bestTile, packGroups, packMultipleContainers, recommendContainers } = window.CartonApp.Algorithms;
   const {
@@ -217,7 +217,7 @@ window.CartonApp.MainApp = function () {
         qty: 10,
         weight: 10.0,
         innersPerBox: 0,
-        color: GROUP_COLORS[newIndex % GROUP_COLORS.length],
+        color: window.CartonApp.Constants.getGroupColor(newIndex),
         allowVerticalFlip: true,
       },
     ]);
@@ -559,7 +559,7 @@ window.CartonApp.MainApp = function () {
         qty: g.quantity || 0,
         weight: g.weight || 0,
         innersPerBox: g.innersPerBox || 0,
-        color: g.color || GROUP_COLORS[index % GROUP_COLORS.length],
+        color: g.color || window.CartonApp.Constants.getGroupColor(index),
         allowVerticalFlip: g.allowVerticalFlip !== false, // Default to true if not specified
       }));
 
