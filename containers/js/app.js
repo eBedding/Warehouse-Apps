@@ -63,6 +63,13 @@ window.CartonApp.MainApp = function () {
   const [isRecommending, setIsRecommending] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // Enabled container types for recommendation (all enabled by default, excluding "Custom size")
+  const [enabledContainerTypes, setEnabledContainerTypes] = useState(() => {
+    return PALLET_SIZES
+      .filter(p => p.L !== null) // Exclude "Custom size"
+      .map(p => p.label);
+  });
+
   // Import modal state
   const [showImportModal, setShowImportModal] = useState(false);
   const [importJsonText, setImportJsonText] = useState("");
@@ -342,7 +349,9 @@ window.CartonApp.MainApp = function () {
 
     // Use setTimeout to allow UI to update with loading state before heavy computation
     setTimeout(() => {
-      const recommended = recommendContainers(cartonGroups, PALLET_SIZES, allowVerticalFlip);
+      // Filter to only enabled container types
+      const availableTypes = PALLET_SIZES.filter(p => enabledContainerTypes.includes(p.label));
+      const recommended = recommendContainers(cartonGroups, availableTypes, allowVerticalFlip);
       if (recommended.length > 0) {
         setContainers(recommended);
         setActiveContainerIndex(0);
@@ -993,7 +1002,7 @@ window.CartonApp.MainApp = function () {
                   className:
                     "px-3 py-1 bg-teal-500 text-white rounded-lg text-sm hover:bg-teal-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2",
                   onClick: handleRecommendContainers,
-                  disabled: isRecommending,
+                  disabled: isRecommending || enabledContainerTypes.length === 0,
                 },
                 isRecommending && React.createElement(
                   "svg",
@@ -1028,6 +1037,46 @@ window.CartonApp.MainApp = function () {
                 },
                 "+ Add Container"
               )
+            )
+          ),
+
+          // Container type filter checkboxes for recommendation
+          React.createElement(
+            "div",
+            { className: "p-3 bg-gray-50 rounded-lg border" },
+            React.createElement(
+              "p",
+              { className: "text-xs text-gray-600 mb-2" },
+              "Container types to consider for recommendation:"
+            ),
+            React.createElement(
+              "div",
+              { className: "flex flex-wrap gap-3" },
+              ...PALLET_SIZES
+                .filter(p => p.L !== null) // Exclude "Custom size"
+                .map(p =>
+                  React.createElement(
+                    "label",
+                    {
+                      key: p.label,
+                      className: "flex items-center gap-1 text-xs cursor-pointer"
+                    },
+                    React.createElement("input", {
+                      type: "checkbox",
+                      checked: enabledContainerTypes.includes(p.label),
+                      onChange: (e) => {
+                        if (e.target.checked) {
+                          setEnabledContainerTypes(prev => [...prev, p.label]);
+                        } else {
+                          setEnabledContainerTypes(prev => prev.filter(t => t !== p.label));
+                        }
+                      },
+                      className: "rounded"
+                    }),
+                    // Shortened label for display
+                    p.label.split(" (")[0]
+                  )
+                )
             )
           ),
 

@@ -477,7 +477,10 @@ window.CartonApp.Algorithms = {
     // - Packs each group COMPLETELY before moving to the next
     // - Groups stay together (no interleaving) for real-world loading
     // - Uses heightmap for proper stacking within each group
-    // - Greedy placement: lowest floor first, back-to-front, left-to-right
+    // - Greedy placement: back-to-front, left-to-right, floor-to-ceiling
+    // - Two-phase orientation strategy:
+    //   Phase 1: Use best (primary) orientation for consistent walls
+    //   Phase 2: Fill remaining gaps with secondary orientations
     // ------------------------------------------------
     runMaxRectsPacking: function (groups, palletL, palletW, palletH, config) {
         const startTime = performance.now();
@@ -603,57 +606,72 @@ window.CartonApp.Algorithms = {
                 continue;
             }
 
+            // Sort orientations by how well they fit the container
+            // Primary orientation = best fit, used for main packing
+            // Secondary orientations = used to fill gaps after primary exhausted
+            const scoredOrientations = orientations.map(orient => {
+                const fitsW = Math.floor(palletW / orient.w);
+                const fitsL = Math.floor(palletL / orient.l);
+                const fitsH = Math.floor(palletH / orient.h);
+                // Prioritize width packing, then length, then height
+                const score = fitsW * 10000 + fitsL * 100 + fitsH;
+                return { orient, score };
+            }).sort((a, b) => b.score - a.score);
+
+            const primaryOrient = scoredOrientations[0].orient;
+            const secondaryOrientations = scoredOrientations.slice(1).map(s => s.orient);
+
             console.log(`[runMaxRectsPacking] Packing group ${group.name || group.id}: ${group.remainingQty} boxes`);
+            console.log(`  Primary orientation: ${primaryOrient.l}×${primaryOrient.w}×${primaryOrient.h}`);
+            if (secondaryOrientations.length > 0) {
+                console.log(`  Secondary orientations available: ${secondaryOrientations.length}`);
+            }
 
             // Pack all boxes from this group before moving to next
             let boxesPlacedThisGroup = 0;
             let iterationsThisGroup = 0;
+            let primaryPlaced = 0;
+            let secondaryPlaced = 0;
 
-            while (group.remainingQty > 0 && iterationsThisGroup < maxIterationsPerBox * group.remainingQty) {
+            // PHASE 1: Pack using PRIMARY orientation until no more fit
+            let primaryExhausted = false;
+
+            while (group.remainingQty > 0 && !primaryExhausted && iterationsThisGroup < maxIterationsPerBox * 10000) {
                 iterationsThisGroup++;
                 totalIterations++;
 
+                const boxL = primaryOrient.l;
+                const boxW = primaryOrient.w;
+                const boxH = primaryOrient.h;
+
                 let bestPlacement = null;
                 let bestScore = Infinity;
-                let bestOrient = null;
 
                 const candidates = getCandidatePositions();
 
-                // Try ALL orientations at ALL positions for THIS group only
-                for (const orient of orientations) {
-                    const boxL = orient.l;
-                    const boxW = orient.w;
-                    const boxH = orient.h;
+                for (const { posL, posW } of candidates) {
+                    if (posL + boxL > palletL || posW + boxW > palletW) continue;
 
-                    for (const { posL, posW } of candidates) {
-                        if (posL + boxL > palletL || posW + boxW > palletW) continue;
+                    const floorH = getFloorHeight(posL, posW, boxL, boxW);
+                    if (floorH + boxH > palletH) continue;
 
-                        const floorH = getFloorHeight(posL, posW, boxL, boxW);
-                        if (floorH + boxH > palletH) continue;
+                    // Score: pack from BACK first (low posL), then left (low posW), then up (low floor)
+                    const score = posL * 100000 + posW * 1000 + floorH;
 
-                        // Score: pack from BACK first (low posL), then left (low posW), then up (low floor)
-                        // This fills the back wall floor-to-ceiling before moving forward toward the door
-                        const score = posL * 100000 + posW * 1000 + floorH;
-
-                        if (score < bestScore) {
-                            bestScore = score;
-                            bestOrient = orient;
-                            bestPlacement = { posL, posW, floorH };
-                        }
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestPlacement = { posL, posW, floorH };
                     }
                 }
 
-                // No valid placement found for this group - move to next group
-                if (!bestPlacement || !bestOrient) {
-                    console.log(`[runMaxRectsPacking] No more space for group ${group.name || group.id}, ${group.remainingQty} remaining`);
+                if (!bestPlacement) {
+                    // Primary orientation can't fit anymore - move to phase 2
+                    primaryExhausted = true;
+                    console.log(`  Primary orientation exhausted after ${primaryPlaced} boxes`);
                     break;
                 }
 
                 // Place the box
-                const boxL = bestOrient.l;
-                const boxW = bestOrient.w;
-                const boxH = bestOrient.h;
-
                 const placement = {
                     x: bestPlacement.posL + boxL / 2 - palletL / 2,
                     y: bestPlacement.floorH + boxH / 2 + 100,
@@ -663,7 +681,7 @@ window.CartonApp.Algorithms = {
                     h: boxH,
                     groupId: group.id,
                     color: group.color,
-                    orientation: bestOrient.label,
+                    orientation: primaryOrient.label,
                     localL: bestPlacement.posL,
                     localW: bestPlacement.posW,
                     localH: bestPlacement.floorH,
@@ -677,12 +695,99 @@ window.CartonApp.Algorithms = {
                 group.remainingQty--;
                 group.placedCount = (group.placedCount || 0) + 1;
                 boxesPlacedThisGroup++;
+                primaryPlaced++;
 
-                // Update heightmap
                 setFloorHeight(bestPlacement.posL, bestPlacement.posW, boxL, boxW, bestPlacement.floorH + boxH);
             }
 
-            console.log(`[runMaxRectsPacking] Group ${group.name || group.id}: placed ${boxesPlacedThisGroup} boxes`);
+            // PHASE 2: Fill gaps using SECONDARY orientations
+            // Only if primary is exhausted and we still have boxes and secondary orientations
+            if (primaryExhausted && group.remainingQty > 0 && secondaryOrientations.length > 0) {
+                console.log(`  Phase 2: Filling gaps with secondary orientations...`);
+
+                let noMoreFits = false;
+
+                while (group.remainingQty > 0 && !noMoreFits && iterationsThisGroup < maxIterationsPerBox * 10000) {
+                    iterationsThisGroup++;
+                    totalIterations++;
+
+                    let bestPlacement = null;
+                    let bestScore = Infinity;
+                    let bestOrient = null;
+
+                    const candidates = getCandidatePositions();
+
+                    // Try ALL secondary orientations at ALL positions to find best fit
+                    for (const orient of secondaryOrientations) {
+                        const boxL = orient.l;
+                        const boxW = orient.w;
+                        const boxH = orient.h;
+
+                        for (const { posL, posW } of candidates) {
+                            if (posL + boxL > palletL || posW + boxW > palletW) continue;
+
+                            const floorH = getFloorHeight(posL, posW, boxL, boxW);
+                            if (floorH + boxH > palletH) continue;
+
+                            // Score: same as primary - back first, left, then up
+                            const score = posL * 100000 + posW * 1000 + floorH;
+
+                            if (score < bestScore) {
+                                bestScore = score;
+                                bestPlacement = { posL, posW, floorH };
+                                bestOrient = orient;
+                            }
+                        }
+                    }
+
+                    if (!bestPlacement || !bestOrient) {
+                        noMoreFits = true;
+                        break;
+                    }
+
+                    // Place the box with secondary orientation
+                    const boxL = bestOrient.l;
+                    const boxW = bestOrient.w;
+                    const boxH = bestOrient.h;
+
+                    const placement = {
+                        x: bestPlacement.posL + boxL / 2 - palletL / 2,
+                        y: bestPlacement.floorH + boxH / 2 + 100,
+                        z: bestPlacement.posW + boxW / 2 - palletW / 2,
+                        l: boxL,
+                        w: boxW,
+                        h: boxH,
+                        groupId: group.id,
+                        color: group.color,
+                        orientation: bestOrient.label,
+                        localL: bestPlacement.posL,
+                        localW: bestPlacement.posW,
+                        localH: bestPlacement.floorH,
+                        volume: boxL * boxW * boxH,
+                        weight: group.weight,
+                        support: bestPlacement.floorH === 0 ? 1.0 : 0
+                    };
+
+                    placements.push(placement);
+                    group.placements.push(placement);
+                    group.remainingQty--;
+                    group.placedCount = (group.placedCount || 0) + 1;
+                    boxesPlacedThisGroup++;
+                    secondaryPlaced++;
+
+                    setFloorHeight(bestPlacement.posL, bestPlacement.posW, boxL, boxW, bestPlacement.floorH + boxH);
+                }
+
+                if (secondaryPlaced > 0) {
+                    console.log(`  Secondary orientations filled ${secondaryPlaced} additional boxes`);
+                }
+            }
+
+            if (group.remainingQty > 0) {
+                console.log(`  ${group.remainingQty} boxes could not fit in container`);
+            }
+
+            console.log(`[runMaxRectsPacking] Group ${group.name || group.id}: placed ${boxesPlacedThisGroup} boxes (${primaryPlaced} primary, ${secondaryPlaced} secondary)`);
         }
 
         // Calculate max height used
@@ -1037,14 +1142,28 @@ window.CartonApp.Algorithms = {
             return [];
         }
 
-        // Test capacity for each container type
+        // Get margins from constants (same as used in app.js effectiveContainers)
+        const defaultMargins = window.CartonApp.Constants.DEFAULT_VALUES?.margins || { door: 0, ceiling: 0, sides: 0 };
+        const doorMargin = Number(defaultMargins.door) || 0;
+        const ceilingMargin = Number(defaultMargins.ceiling) || 0;
+        const sidesMargin = Number(defaultMargins.sides) || 0;
+
+        // Helper to apply margins to container dimensions (same logic as effectiveContainers in app.js)
+        const applyMargins = (type) => ({
+            L: Math.max(0, type.L - doorMargin),
+            W: Math.max(0, type.W - (sidesMargin * 2)),
+            H: Math.max(0, type.H - ceilingMargin)
+        });
+
+        // Test capacity for each container type (using EFFECTIVE dimensions with margins)
         const typeCapacities = validTypes.map(type => {
+            const effective = applyMargins(type);
             const testContainer = [{
                 id: "test",
                 type: type.label,
-                L: type.L,
-                W: type.W,
-                H: type.H,
+                L: effective.L,
+                W: effective.W,
+                H: effective.H,
                 weightLimit: type.WeightLimit
             }];
 
@@ -1094,7 +1213,18 @@ window.CartonApp.Algorithms = {
         // Strategy 1: Single container types (1x, 2x, 3x of same type)
         for (const typeInfo of typeCapacities) {
             for (let count = 1; count <= maxContainers; count++) {
-                const containers = Array.from({ length: count }, (_, idx) => ({
+                const effective = applyMargins(typeInfo.type);
+                // Test containers use EFFECTIVE dimensions (with margins) for accurate capacity
+                const testContainers = Array.from({ length: count }, (_, idx) => ({
+                    id: Date.now() + idx,
+                    type: typeInfo.type.label,
+                    L: effective.L,
+                    W: effective.W,
+                    H: effective.H,
+                    weightLimit: typeInfo.type.WeightLimit
+                }));
+                // Return containers use ORIGINAL dimensions (app.js will apply margins)
+                const returnContainers = Array.from({ length: count }, (_, idx) => ({
                     id: Date.now() + idx,
                     type: typeInfo.type.label,
                     L: typeInfo.type.L,
@@ -1103,9 +1233,10 @@ window.CartonApp.Algorithms = {
                     weightLimit: typeInfo.type.WeightLimit
                 }));
 
-                const result = testConfig(containers);
+                const result = testConfig(testContainers);
                 if (result.totalPlaced >= totalCartons) {
-                    candidates.push(result);
+                    // Store returnContainers (original dims) for the candidate
+                    candidates.push({ ...result, containers: returnContainers });
                     break; // Found minimum count for this type
                 }
             }
@@ -1117,66 +1248,42 @@ window.CartonApp.Algorithms = {
             for (let j = i; j < typeCapacities.length; j++) {
                 const type1 = typeCapacities[i];
                 const type2 = typeCapacities[j];
+                const eff1 = applyMargins(type1.type);
+                const eff2 = applyMargins(type2.type);
 
                 // Try 1 of each
                 if (i !== j) {
-                    const containers = [
-                        {
-                            id: Date.now(),
-                            type: type1.type.label,
-                            L: type1.type.L,
-                            W: type1.type.W,
-                            H: type1.type.H,
-                            weightLimit: type1.type.WeightLimit
-                        },
-                        {
-                            id: Date.now() + 1,
-                            type: type2.type.label,
-                            L: type2.type.L,
-                            W: type2.type.W,
-                            H: type2.type.H,
-                            weightLimit: type2.type.WeightLimit
-                        }
+                    const testContainers = [
+                        { id: Date.now(), type: type1.type.label, L: eff1.L, W: eff1.W, H: eff1.H, weightLimit: type1.type.WeightLimit },
+                        { id: Date.now() + 1, type: type2.type.label, L: eff2.L, W: eff2.W, H: eff2.H, weightLimit: type2.type.WeightLimit }
+                    ];
+                    const returnContainers = [
+                        { id: Date.now(), type: type1.type.label, L: type1.type.L, W: type1.type.W, H: type1.type.H, weightLimit: type1.type.WeightLimit },
+                        { id: Date.now() + 1, type: type2.type.label, L: type2.type.L, W: type2.type.W, H: type2.type.H, weightLimit: type2.type.WeightLimit }
                     ];
 
-                    const result = testConfig(containers);
+                    const result = testConfig(testContainers);
                     if (result.totalPlaced >= totalCartons) {
-                        candidates.push(result);
+                        candidates.push({ ...result, containers: returnContainers });
                     }
                 }
 
                 // Try 1 large + 2 smaller (common: 1x 40'HC + 2x 20')
                 if (i !== j && type1.capacity > type2.capacity) {
-                    const containers = [
-                        {
-                            id: Date.now(),
-                            type: type1.type.label,
-                            L: type1.type.L,
-                            W: type1.type.W,
-                            H: type1.type.H,
-                            weightLimit: type1.type.WeightLimit
-                        },
-                        {
-                            id: Date.now() + 1,
-                            type: type2.type.label,
-                            L: type2.type.L,
-                            W: type2.type.W,
-                            H: type2.type.H,
-                            weightLimit: type2.type.WeightLimit
-                        },
-                        {
-                            id: Date.now() + 2,
-                            type: type2.type.label,
-                            L: type2.type.L,
-                            W: type2.type.W,
-                            H: type2.type.H,
-                            weightLimit: type2.type.WeightLimit
-                        }
+                    const testContainers = [
+                        { id: Date.now(), type: type1.type.label, L: eff1.L, W: eff1.W, H: eff1.H, weightLimit: type1.type.WeightLimit },
+                        { id: Date.now() + 1, type: type2.type.label, L: eff2.L, W: eff2.W, H: eff2.H, weightLimit: type2.type.WeightLimit },
+                        { id: Date.now() + 2, type: type2.type.label, L: eff2.L, W: eff2.W, H: eff2.H, weightLimit: type2.type.WeightLimit }
+                    ];
+                    const returnContainers = [
+                        { id: Date.now(), type: type1.type.label, L: type1.type.L, W: type1.type.W, H: type1.type.H, weightLimit: type1.type.WeightLimit },
+                        { id: Date.now() + 1, type: type2.type.label, L: type2.type.L, W: type2.type.W, H: type2.type.H, weightLimit: type2.type.WeightLimit },
+                        { id: Date.now() + 2, type: type2.type.label, L: type2.type.L, W: type2.type.W, H: type2.type.H, weightLimit: type2.type.WeightLimit }
                     ];
 
-                    const result = testConfig(containers);
+                    const result = testConfig(testContainers);
                     if (result.totalPlaced >= totalCartons) {
-                        candidates.push(result);
+                        candidates.push({ ...result, containers: returnContainers });
                     }
                 }
             }
