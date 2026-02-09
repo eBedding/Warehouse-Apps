@@ -20,6 +20,20 @@ window.CartonApp.MainApp = function () {
   // -------------------------------------------------
   // STATE
   // -------------------------------------------------
+  // Container margins (mm) - user configurable
+  const [margins, setMargins] = useState({
+    door: Number(DEFAULT_VALUES.margins?.door) || 0,
+    ceiling: Number(DEFAULT_VALUES.margins?.ceiling) || 0,
+    sides: Number(DEFAULT_VALUES.margins?.sides) || 0,
+  });
+
+  // Sync margins state back to constants so algorithms.js can read them
+  React.useEffect(() => {
+    if (window.CartonApp.Constants.DEFAULT_VALUES) {
+      window.CartonApp.Constants.DEFAULT_VALUES.margins = { ...margins };
+    }
+  }, [margins]);
+
   const [carton, setCarton] = useState({
     ...DEFAULT_VALUES.carton,
     weight: 10.0,
@@ -141,12 +155,11 @@ window.CartonApp.MainApp = function () {
     [carton, containerLimits.palletL, containerLimits.palletW, containerLimits.palletH, allowVerticalFlip]
   );
 
-  // Apply hardcoded margins from constants to get effective container dimensions
+  // Apply user-configured margins to get effective container dimensions
   const effectiveContainers = useMemo(() => {
-    const defaultMargins = DEFAULT_VALUES.margins || { door: 0, ceiling: 0, sides: 0 };
-    const doorMargin = Number(defaultMargins.door) || 0;
-    const ceilingMargin = Number(defaultMargins.ceiling) || 0;
-    const sidesMargin = Number(defaultMargins.sides) || 0;
+    const doorMargin = Number(margins.door) || 0;
+    const ceilingMargin = Number(margins.ceiling) || 0;
+    const sidesMargin = Number(margins.sides) || 0;
 
     return containers.map(c => ({
       ...c,
@@ -159,7 +172,7 @@ window.CartonApp.MainApp = function () {
       originalW: c.W,
       originalH: c.H,
     }));
-  }, [containers]);
+  }, [containers, margins]);
 
   // Multi-container packing: pack groups across all containers
   // NOTE: cartonGroups is intentionally NOT in the dependency array to prevent
@@ -1077,6 +1090,60 @@ window.CartonApp.MainApp = function () {
                     p.label.split(" (")[0]
                   )
                 )
+            )
+          ),
+
+          // Container margins (mm) - user configurable
+          React.createElement(
+            "div",
+            { className: "p-3 bg-gray-50 rounded-lg border" },
+            React.createElement(
+              "p",
+              { className: "text-xs text-gray-600 mb-2" },
+              "Container margins (mm):"
+            ),
+            React.createElement(
+              "div",
+              { className: "grid grid-cols-3 gap-2" },
+              React.createElement(
+                "label",
+                { className: "text-xs text-gray-700" },
+                "Door (length)",
+                React.createElement("input", {
+                  type: "number",
+                  min: 0,
+                  step: 1,
+                  value: margins.door,
+                  onChange: (e) => setMargins(m => ({ ...m, door: Number(e.target.value) || 0 })),
+                  className: "border rounded px-2 py-1 w-full text-sm mt-1",
+                })
+              ),
+              React.createElement(
+                "label",
+                { className: "text-xs text-gray-700" },
+                "Ceiling (height)",
+                React.createElement("input", {
+                  type: "number",
+                  min: 0,
+                  step: 1,
+                  value: margins.ceiling,
+                  onChange: (e) => setMargins(m => ({ ...m, ceiling: Number(e.target.value) || 0 })),
+                  className: "border rounded px-2 py-1 w-full text-sm mt-1",
+                })
+              ),
+              React.createElement(
+                "label",
+                { className: "text-xs text-gray-700" },
+                "Sides (each side)",
+                React.createElement("input", {
+                  type: "number",
+                  min: 0,
+                  step: 1,
+                  value: margins.sides,
+                  onChange: (e) => setMargins(m => ({ ...m, sides: Number(e.target.value) || 0 })),
+                  className: "border rounded px-2 py-1 w-full text-sm mt-1",
+                })
+              )
             )
           ),
 

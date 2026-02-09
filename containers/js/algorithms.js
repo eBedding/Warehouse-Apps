@@ -519,8 +519,41 @@ window.CartonApp.Algorithms = {
             });
         };
 
-        // Heightmap for tracking floor level at each position
-        const resolution = 50;
+        // Compute heightmap resolution dynamically based on actual box dimensions
+        // Using GCD of all unique dimensions ensures no cell-boundary bleed
+        // (e.g., 50mm resolution with 1020mm box causes 20.4 cell overlap, creating gaps)
+        const gcd = (a, b) => { a = Math.round(a); b = Math.round(b); while (b) { [a, b] = [b, a % b]; } return a; };
+        const allDims = new Set();
+        for (const group of groups) {
+            if (group.l > 0) allDims.add(Math.round(group.l));
+            if (group.w > 0) allDims.add(Math.round(group.w));
+            if (group.h > 0) allDims.add(Math.round(group.h));
+        }
+        let resolution = 50; // Default fallback
+        if (allDims.size > 0) {
+            const dims = [...allDims];
+            let gcdRes = dims.reduce((g, d) => gcd(g, d));
+
+            // Use the GCD if it produces a reasonable grid size (under 500K cells)
+            // This ensures box dimensions divide evenly into the grid, preventing cell-boundary bleed
+            // (e.g., 50mm resolution with 1020mm box = 20.4 cells, causing ghost occupation)
+            const gridCells = Math.ceil(palletL / gcdRes) * Math.ceil(palletW / gcdRes);
+            if (gridCells <= 500000) {
+                resolution = gcdRes;
+            } else {
+                // GCD too small for performance; find a larger multiple that still divides evenly
+                for (let mult = 2; mult <= 50; mult++) {
+                    const candidate = gcdRes * mult;
+                    const cells = Math.ceil(palletL / candidate) * Math.ceil(palletW / candidate);
+                    if (cells <= 500000) {
+                        resolution = candidate;
+                        break;
+                    }
+                }
+            }
+            resolution = Math.max(1, resolution);
+        }
+        console.log(`[runMaxRectsPacking] Heightmap resolution: ${resolution}mm`);
         const gridL = Math.ceil(palletL / resolution);
         const gridW = Math.ceil(palletW / resolution);
         const heightMap = [];
@@ -563,30 +596,44 @@ window.CartonApp.Algorithms = {
         };
 
         // Collect candidate positions
-        const getCandidatePositions = () => {
+        // Combines: box-dimension-aligned grid + heightmap grid + corner positions
+        const getCandidatePositions = (boxL, boxW) => {
             const positions = [];
             const seen = new Set();
 
             const addPos = (posL, posW) => {
-                const key = `${posL},${posW}`;
+                const rL = Math.round(posL);
+                const rW = Math.round(posW);
+                if (rL < 0 || rW < 0 || rL > palletL || rW > palletW) return;
+                const key = `${rL},${rW}`;
                 if (!seen.has(key)) {
                     seen.add(key);
-                    positions.push({ posL, posW });
+                    positions.push({ posL: rL, posW: rW });
                 }
             };
 
-            // Grid positions (sparse for speed)
+            // 1. Exact multiples of current box dimensions (tight packing, no gaps)
+            const stepsL = Math.ceil(palletL / boxL) + 1;
+            const stepsW = Math.ceil(palletW / boxW) + 1;
+            for (let i = 0; i < stepsL; i++) {
+                for (let j = 0; j < stepsW; j++) {
+                    addPos(i * boxL, j * boxW);
+                }
+            }
+
+            // 2. Heightmap grid (for gap filling, especially Phase 2)
             for (let i = 0; i < gridL; i++) {
                 for (let j = 0; j < gridW; j++) {
                     addPos(i * resolution, j * resolution);
                 }
             }
 
-            // Corner positions from placed boxes (for tight packing)
+            // 3. Corner positions from placed boxes (tight packing across orientation changes)
             for (const p of placements) {
                 addPos(p.localL + p.l, p.localW);
                 addPos(p.localL, p.localW + p.w);
                 addPos(p.localL + p.l, p.localW + p.w);
+                addPos(p.localL, p.localW);
             }
 
             return positions;
@@ -613,8 +660,11 @@ window.CartonApp.Algorithms = {
                 const fitsW = Math.floor(palletW / orient.w);
                 const fitsL = Math.floor(palletL / orient.l);
                 const fitsH = Math.floor(palletH / orient.h);
-                // Prioritize width packing, then length, then height
-                const score = fitsW * 10000 + fitsL * 100 + fitsH;
+                // Primary: total box count (the whole point is to fit the most boxes)
+                // Tiebreaker: prefer orientations that waste less height
+                const totalBoxes = fitsL * fitsW * fitsH;
+                const heightEfficiency = (fitsH * orient.h) / palletH;
+                const score = totalBoxes * 1000 + heightEfficiency * 100;
                 return { orient, score };
             }).sort((a, b) => b.score - a.score);
 
@@ -647,7 +697,7 @@ window.CartonApp.Algorithms = {
                 let bestPlacement = null;
                 let bestScore = Infinity;
 
-                const candidates = getCandidatePositions();
+                const candidates = getCandidatePositions(boxL, boxW);
 
                 for (const { posL, posW } of candidates) {
                     if (posL + boxL > palletL || posW + boxW > palletW) continue;
@@ -715,13 +765,14 @@ window.CartonApp.Algorithms = {
                     let bestScore = Infinity;
                     let bestOrient = null;
 
-                    const candidates = getCandidatePositions();
-
                     // Try ALL secondary orientations at ALL positions to find best fit
                     for (const orient of secondaryOrientations) {
                         const boxL = orient.l;
                         const boxW = orient.w;
                         const boxH = orient.h;
+
+                        // Generate candidate positions aligned to THIS orientation's dimensions
+                        const candidates = getCandidatePositions(boxL, boxW);
 
                         for (const { posL, posW } of candidates) {
                             if (posL + boxL > palletL || posW + boxW > palletW) continue;
