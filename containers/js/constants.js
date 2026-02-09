@@ -19,9 +19,9 @@ window.CartonApp.Constants = {
     // Container margin defaults (mm)
     // These reduce usable space to account for practical loading constraints
     margins: {
-      door: 200,    // Space reserved at door end (length reduction)
-      ceiling: 150, // Space reserved at top (height reduction)
-      sides: 25,   // Space reserved on sides (width reduction, applied to both sides)
+      door: 0,    // Space reserved at door end (length reduction)
+      ceiling: 0, // Space reserved at top (height reduction)
+      sides: 0,   // Space reserved on sides (width reduction, applied to both sides)
     },
   },
 
