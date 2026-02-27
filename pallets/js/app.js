@@ -85,6 +85,215 @@ window.CartonApp.MainApp = function () {
   const palletOverweight = limits.palletGrossMax && palletWeight > limits.palletGrossMax;
 
   // -------------------------------------------------
+  // BULK IMPORT / EXPORT (TiHi)
+  // -------------------------------------------------
+  const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+  const [bulkUnit, setBulkUnit] = useState("mm");
+  const bulkFileRef = React.useRef(null);
+
+  function handleBulkImport(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // File size limit (10 MB)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      alert("File too large. Maximum size is 10 MB.");
+      e.target.value = "";
+      return;
+    }
+
+    // File type validation
+    const validExtensions = [".xlsx", ".xls", ".csv"];
+    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+    if (!validExtensions.includes(ext)) {
+      alert("Please upload a valid Excel (.xlsx, .xls) or CSV (.csv) file.");
+      e.target.value = "";
+      return;
+    }
+
+    setIsBulkProcessing(true);
+
+    const reader = new FileReader();
+    reader.onload = function (evt) {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+
+        if (!rows.length) {
+          alert("No data rows found in file.");
+          setIsBulkProcessing(false);
+          return;
+        }
+
+        // Map column headers flexibly (case-insensitive, partial match)
+        const findCol = (row, ...keywords) => {
+          const keys = Object.keys(row);
+          for (const kw of keywords) {
+            const match = keys.find(k => k.toLowerCase().includes(kw.toLowerCase()));
+            if (match !== undefined) return match;
+          }
+          return null;
+        };
+
+        const sample = rows[0];
+        const colCartonL = findCol(sample, "carton length", "carton l");
+        const colCartonW = findCol(sample, "carton width", "carton w");
+        const colCartonH = findCol(sample, "carton height", "carton h");
+        const colWeight = findCol(sample, "weight");
+        const colInners = findCol(sample, "inner");
+        const colFlip = findCol(sample, "laying", "side", "flip");
+        const colPalletL = findCol(sample, "pallet length", "pallet l");
+        const colPalletW = findCol(sample, "pallet width", "pallet w");
+        const colPalletH = findCol(sample, "height");
+        const colMaxCarton = findCol(sample, "max carton", "carton gross");
+        const colMaxPallet = findCol(sample, "max pallet", "pallet gross");
+
+        // Disambiguate height columns: if colPalletH matched the carton height col, find another
+        const findPalletHeight = () => {
+          const keys = Object.keys(sample);
+          const candidates = keys.filter(k => k.toLowerCase().includes("height") || k.toLowerCase() === "height");
+          // If we have "Carton Height" and "Height", pick the one that's NOT carton height
+          for (const c of candidates) {
+            if (c !== colCartonH) return c;
+          }
+          return colPalletH;
+        };
+        const resolvedPalletH = findPalletHeight();
+
+        // Parse a numeric cell, stripping units like "mm", "kg", "%" etc.
+        const parseNum = (val) => {
+          if (val === "" || val === null || val === undefined) return NaN;
+          if (typeof val === "number") return val;
+          return Number(String(val).replace(/[^0-9.\-]/g, ""));
+        };
+
+        const defaults = DEFAULT_VALUES;
+        const results = [];
+
+        // Unit conversion: cm → mm multiplier
+        const toMm = bulkUnit === "cm" ? 10 : 1;
+        const unitLabel = bulkUnit === "cm" ? "cm" : "mm";
+
+        // Process each row using bestTile algorithm
+        for (const row of rows) {
+          const cL = (parseNum(row[colCartonL]) || defaults.carton.l / toMm) * toMm;
+          const cW = (parseNum(row[colCartonW]) || defaults.carton.w / toMm) * toMm;
+          const cH = (parseNum(row[colCartonH]) || defaults.carton.h / toMm) * toMm;
+          const weight = colWeight ? (parseNum(row[colWeight]) || defaults.carton.weight) : defaults.carton.weight;
+          const inners = colInners ? (parseNum(row[colInners]) || 0) : 0;
+
+          const flipRaw = colFlip ? String(row[colFlip]).trim().toLowerCase() : "";
+          const flip = flipRaw === "" || flipRaw === "yes" || flipRaw === "y" || flipRaw === "true" || flipRaw === "1";
+
+          const pL = colPalletL ? (parseNum(row[colPalletL]) || defaults.limits.palletL) : defaults.limits.palletL;
+          const pW = colPalletW ? (parseNum(row[colPalletW]) || defaults.limits.palletW) : defaults.limits.palletW;
+          const pH = resolvedPalletH ? (parseNum(row[resolvedPalletH]) || defaults.limits.palletH) : defaults.limits.palletH;
+          const maxCarton = colMaxCarton ? (parseNum(row[colMaxCarton]) || defaults.limits.cartonGrossMax) : defaults.limits.cartonGrossMax;
+          const maxPallet = colMaxPallet ? (parseNum(row[colMaxPallet]) || defaults.limits.palletGrossMax) : defaults.limits.palletGrossMax;
+
+          const tile = bestTile(cL, cW, cH, pL, pW, pH, flip);
+
+          const totalCartons = tile.total || 0;
+          const layers = tile.layers || 0;
+          const perLayer = tile.perLayer || 0;
+          const totalWeight = totalCartons * weight;
+          const totalInners = totalCartons * inners;
+          const surfaceUsed = pL * pW > 0
+            ? (((tile.usedL || 0) * (tile.usedW || 0)) / (pL * pW) * 100)
+            : 0;
+          const volUsed = pL * pW * pH > 0
+            ? (((tile.usedL || 0) * (tile.usedW || 0) * (tile.usedH || 0)) / (pL * pW * pH) * 100)
+            : 0;
+          const overweightCarton = weight > maxCarton;
+          const overweightPallet = totalWeight > maxPallet;
+
+          // Convert mm back to display unit for output
+          const toDisplay = (mm) => bulkUnit === "cm" ? Math.round(mm / 10 * 100) / 100 : mm;
+
+          results.push({
+            [`Carton Length (${unitLabel})`]: toDisplay(cL),
+            [`Carton Width (${unitLabel})`]: toDisplay(cW),
+            [`Carton Height (${unitLabel})`]: toDisplay(cH),
+            "(Ti) Cartons per Layer": perLayer,
+            "(Hi) Layers": layers,
+            "Total Cartons": totalCartons,
+            "Weight (kg)": weight,
+            "Inners per Carton": inners,
+            "Total Inners": totalInners,
+            "Total Weight (kg)": Math.round(totalWeight * 100) / 100,
+            "Surface Usage %": Math.round(surfaceUsed) + "%",
+            "Vol Usage %": Math.round(volUsed) + "%",
+            [`Stack Height (${unitLabel})`]: toDisplay(tile.usedH || 0),
+            [`Pallet Length (${unitLabel})`]: toDisplay(pL),
+            [`Pallet Width (${unitLabel})`]: toDisplay(pW),
+            [`Pallet Height (${unitLabel})`]: toDisplay(pH),
+            "Max Carton (kg)": maxCarton,
+            "Max Pallet (kg)": maxPallet,
+            "Carton Overweight": overweightCarton ? "YES" : "",
+            "Pallet Overweight": overweightPallet ? "YES" : "",
+          });
+        }
+
+        // Generate and download the results as xlsx
+        const ws = XLSX.utils.json_to_sheet(results);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Results");
+        XLSX.writeFile(wb, `TiHi-results-${new Date().toISOString().split("T")[0]}.xlsx`);
+
+      } catch (err) {
+        console.error("Bulk import error:", err);
+        alert("Error processing file: " + err.message);
+      }
+
+      setIsBulkProcessing(false);
+      // Reset file input so the same file can be re-uploaded
+      if (bulkFileRef.current) bulkFileRef.current.value = "";
+    };
+
+    reader.readAsArrayBuffer(file);
+  }
+
+  function handleDownloadTemplate() {
+    const u = bulkUnit === "cm" ? "cm" : "mm";
+    const d = bulkUnit === "cm" ? 10 : 1; // divisor from mm defaults
+    const templateData = [
+      {
+        [`Carton Length (${u})`]: 600 / d,
+        [`Carton Width (${u})`]: 400 / d,
+        [`Carton Height (${u})`]: 300 / d,
+        "Weight (kg)": 10,
+        "Inners": 0,
+        "Allow laying on side": "Yes",
+        [`Pallet Length (${u})`]: 1200 / d,
+        [`Pallet Width (${u})`]: 1000 / d,
+        [`Height (${u})`]: 1200 / d,
+        "Max Carton gross (kg)": 25,
+        "Max Pallet Gross (kg)": 1600,
+      },
+      {
+        [`Carton Length (${u})`]: 400 / d,
+        [`Carton Width (${u})`]: 400 / d,
+        [`Carton Height (${u})`]: 300 / d,
+        "Weight (kg)": 8,
+        "Inners": 0,
+        "Allow laying on side": "Yes",
+        [`Pallet Length (${u})`]: 1200 / d,
+        [`Pallet Width (${u})`]: 1000 / d,
+        [`Height (${u})`]: 1200 / d,
+        "Max Carton gross (kg)": 25,
+        "Max Pallet Gross (kg)": 1600,
+      },
+    ];
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Template");
+    XLSX.writeFile(wb, "TiHi-import-template.xlsx");
+  }
+
+  // -------------------------------------------------
   // RENDER
   // -------------------------------------------------
   return React.createElement(
@@ -249,12 +458,126 @@ window.CartonApp.MainApp = function () {
         // TOTAL WEIGHT
         React.createElement(
           "div",
-          { 
+          {
             className: `mt-2 text-sm px-4 ${palletOverweight ? "text-red-600 font-semibold" : "text-gray-600"}`
           },
-          palletOverweight 
+          palletOverweight
             ? `⚠️ Total pallet weight ${palletWeight.toFixed(2)} kg exceeds ${limits.palletGrossMax} kg limit!`
             : `Total pallet weight: ${palletWeight.toFixed(2)} kg`
+        ),
+
+        // BULK IMPORT (TiHi)
+        React.createElement(
+          "section",
+          { className: "p-4 border rounded-2xl shadow-sm bg-white space-y-3" },
+          React.createElement(
+            "h3",
+            { className: "font-semibold" },
+            "Bulk Import (TiHi)"
+          ),
+          React.createElement(
+            "p",
+            { className: "text-xs text-gray-600" },
+            "Upload an Excel or CSV file with multiple carton/pallet configurations. The system will run the algorithm on each row and return the results as a downloadable spreadsheet."
+          ),
+          // Unit toggle (mm / cm)
+          React.createElement(
+            "div",
+            { className: "flex items-center gap-3" },
+            React.createElement("span", { className: "text-sm text-gray-600" }, "Import carton dimensions in:"),
+            React.createElement(
+              "div",
+              { className: "inline-flex rounded-lg border border-gray-300 overflow-hidden" },
+              React.createElement(
+                "button",
+                {
+                  className: `px-3 py-1 text-sm font-medium transition-colors ${bulkUnit === "mm" ? "bg-blue-500 text-white" : "bg-white text-gray-600 hover:bg-gray-100"}`,
+                  onClick: () => setBulkUnit("mm"),
+                },
+                "mm"
+              ),
+              React.createElement(
+                "button",
+                {
+                  className: `px-3 py-1 text-sm font-medium transition-colors ${bulkUnit === "cm" ? "bg-blue-500 text-white" : "bg-white text-gray-600 hover:bg-gray-100"}`,
+                  onClick: () => setBulkUnit("cm"),
+                },
+                "cm"
+              )
+            )
+          ),
+          // Hidden file input
+          React.createElement("input", {
+            ref: bulkFileRef,
+            type: "file",
+            accept: ".xlsx,.xls,.csv",
+            onChange: handleBulkImport,
+            className: "hidden",
+          }),
+          // Buttons row
+          React.createElement(
+            "div",
+            { className: "flex gap-2" },
+            // Upload button
+            React.createElement(
+              "button",
+              {
+                className: "px-4 py-2 bg-blue-500 text-white rounded-lg text-sm font-medium hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2",
+                onClick: () => bulkFileRef.current && bulkFileRef.current.click(),
+                disabled: isBulkProcessing,
+              },
+              isBulkProcessing && React.createElement(
+                "svg",
+                {
+                  className: "animate-spin h-4 w-4",
+                  xmlns: "http://www.w3.org/2000/svg",
+                  fill: "none",
+                  viewBox: "0 0 24 24"
+                },
+                React.createElement("circle", {
+                  className: "opacity-25",
+                  cx: "12", cy: "12", r: "10",
+                  stroke: "currentColor", strokeWidth: "4"
+                }),
+                React.createElement("path", {
+                  className: "opacity-75",
+                  fill: "currentColor",
+                  d: "M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                })
+              ),
+              !isBulkProcessing && React.createElement(
+                "svg",
+                { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+                React.createElement("path", {
+                  strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2",
+                  d: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                })
+              ),
+              isBulkProcessing ? "Processing..." : "Upload & Process"
+            ),
+            // Download template button
+            React.createElement(
+              "button",
+              {
+                className: "px-4 py-2 bg-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-300 flex items-center gap-2",
+                onClick: handleDownloadTemplate,
+              },
+              React.createElement(
+                "svg",
+                { className: "w-4 h-4", fill: "none", stroke: "currentColor", viewBox: "0 0 24 24" },
+                React.createElement("path", {
+                  strokeLinecap: "round", strokeLinejoin: "round", strokeWidth: "2",
+                  d: "M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                })
+              ),
+              "Download Template"
+            )
+          ),
+          React.createElement(
+            "p",
+            { className: "text-xs text-gray-500" },
+            "Missing values will use defaults. Column order does not matter."
+          )
         )
       ),
 

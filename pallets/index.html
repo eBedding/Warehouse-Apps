@@ -4,16 +4,35 @@
   <meta charset="UTF-8" />
   <title>Carton & Pallet Planner</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self';
+                 script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com https://cdn.sheetjs.com https://unpkg.com;
+                 style-src 'self' 'unsafe-inline';
+                 connect-src 'self';
+                 img-src 'self' data: blob:;
+                 object-src 'none';
+                 base-uri 'self';" />
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
+          integrity="sha384-CI3ELBVUz9XQO+97x6nwMDPosPR5XvsxW2ua7N1Xeygeh1IxtgqtCkGfQY9WWdHu"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+          integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+          crossorigin="anonymous"></script>
 </head>
 <body class="bg-gray-100">
   <div id="root"></div>
 
-  <!-- React + Babel -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- React + Babel (pinned versions, production builds) -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+          integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+          crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+          integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+          crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.9/babel.min.js"
+          integrity="sha384-pKNXKj7jF9BNMkQyGWg5YLfoPyqBa/gf7wjTSoTGQlwxbZB+sabJuKyOHR6JQvTd"
+          crossorigin="anonymous"></script>
 
   <!-- Global namespace -->
   <script>
