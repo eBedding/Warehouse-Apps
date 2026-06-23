@@ -1,11 +1,12 @@
 # Warehouse Tools
 
-A suite of web-based tools for warehouse logistics planning, including pallet stacking optimization and shipping container packing visualization.
+A suite of web-based tools for warehouse logistics planning, including pallet stacking optimization, shipping container packing visualization, and Orderwise data lookups.
 
 ## Live Demo
 
 - **Pallets**: [tools.e-bedding.co.uk/pallets](https://tools.e-bedding.co.uk/pallets)
 - **Containers**: [tools.e-bedding.co.uk/containers](https://tools.e-bedding.co.uk/containers)
+- **Orderwise Order Checker**: linked from the landing page (n8n-hosted, basic-auth gated)
 
 ## Features
 
@@ -28,6 +29,12 @@ A suite of web-based tools for warehouse logistics planning, including pallet st
   - Total cartons and inners per container
   - Group breakdown with dimensions, quantities, and weights
 - Inner product tracking (products per carton)
+
+### Orderwise Order Checker (n8n)
+- Linked from the landing page under the **Order Tools** section
+- An n8n-hosted form that queries the Orderwise API to check whether an order exists
+- Unlike the planners (static, no API), this tool hits an external API, so the form is
+  gated with basic auth in n8n — see [Securing the Orderwise tool](#securing-the-orderwise-tool)
 
 ## Tech Stack
 
@@ -63,6 +70,8 @@ WarehouseTools/
 │           ├── PalletView3D.js
 │           ├── MetricCard.js
 │           └── ...
+├── api/
+│   └── send-report.php       # PHP mailer (Mailgun)
 └── README.md
 ```
 
@@ -89,4 +98,33 @@ No build step or npm install required - all dependencies are loaded via CDN.
 3. Add containers or use "Recommend Containers" for automatic selection
 4. View 3D packing visualization for each container
 5. Click "Export Spreadsheet" to download a CSV summary
+
+### Orderwise Order Checker
+1. From the landing page, open the **Order Tools → Orderwise Order Checker** link
+2. If the browser shows a login prompt, enter the shared credentials (hinted on the landing page)
+3. Fill in the n8n form to check whether an order exists in Orderwise
+
+## Securing the Orderwise tool
+
+The planners are static and need no protection. The Orderwise checker, however, calls the
+Orderwise API, so it needs some friction. The form is hosted on **n8n Cloud**
+(`ebedding.app.n8n.cloud`), which means traffic goes straight from the browser to n8n —
+this project's own server (and its Nginx) is never in the path, so server-side rate
+limiting / firewalling can't be applied here. Gating is therefore done **inside n8n**.
+
+**Basic auth on the Form Trigger:**
+1. Open the workflow in n8n → select the **Form Trigger** node
+2. Set **Authentication → Basic Auth** and choose a username + password
+3. Match the username/password to the hint shown on the landing page
+
+The credentials are hinted on the landing page (the `User: ... / Pass: ...` box in
+[`index.html`](index.html)) so the team isn't locked out by the prompt — update that hint
+whenever the n8n password changes.
+
+> **Note:** because the credential hint is public, basic auth here is *friction, not hard
+> security* — its job is to deter drive-by bots, not a determined attacker. For stronger
+> gating, restrict the form to an internal network/VPN or front it with SSO.
+
+A hidden honeypot field in the form (a field real users never fill in, rejected server-side
+if populated) is a cheap extra bot deterrent.
 
