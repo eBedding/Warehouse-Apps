@@ -66,7 +66,31 @@ window.CartonApp.Utils = {
   // Parse URL params into carton and pallet config
   parseUrlParams: function () {
     const params = new URLSearchParams(window.location.search);
-    const result = { carton: null, pallet: null, preset: null };
+    const result = {
+      carton: null,
+      pallet: null,
+      preset: null,
+      sku: null,
+      weight: null,
+      innersPerCarton: null,
+    };
+
+    // Product SKU — resolved against the catalogue once it has loaded
+    const skuParam = params.get("sku");
+    if (skuParam && skuParam.trim()) result.sku = skuParam.trim();
+
+    // Weight / inners only appear when they diverge from the SKU's catalogue
+    // values, so a link never shows different numbers to the recipient.
+    const weightParam = params.get("weight");
+    if (weightParam !== null) {
+      const n = parseFloat(weightParam);
+      if (!isNaN(n) && n >= 0) result.weight = n;
+    }
+    const innersParam = params.get("inners");
+    if (innersParam !== null) {
+      const n = parseInt(innersParam, 10);
+      if (!isNaN(n) && n >= 0) result.innersPerCarton = n;
+    }
 
     // Parse carton: "270x435x350" -> { l: 270, w: 435, h: 350 }
     const cartonParam = params.get("carton");
@@ -103,12 +127,39 @@ window.CartonApp.Utils = {
   },
 
   // Update URL params without page reload
-  updateUrlParams: function (carton, limits, presetLabel) {
+  updateUrlParams: function (carton, limits, selectedSku, product) {
     const params = new URLSearchParams();
+    const Products = window.CartonApp.Products;
 
-    // Add carton dimensions
-    if (carton.l > 0 && carton.w > 0 && carton.h > 0) {
+    // A link to an unmodified product carries the SKU alone — the dimensions
+    // come from the catalogue on load. Explicit dimensions are written only
+    // once they have been adjusted away from it, so the *presence* of a carton
+    // param alongside a sku is what marks a link as carrying overrides.
+    //
+    // This matters when a URL is edited by hand: changing just the sku on a
+    // clean product link leaves nothing to contradict the new product, so it
+    // loads that product's real dimensions.
+    const usingCatalogue =
+      !!selectedSku && !!product && Products && !Products.isAdjusted(product, carton);
+
+    if (!usingCatalogue && carton.l > 0 && carton.w > 0 && carton.h > 0) {
       params.set("carton", `${carton.l}x${carton.w}x${carton.h}`);
+    }
+
+    if (selectedSku) {
+      params.set("sku", selectedSku);
+      if (product && !usingCatalogue) {
+        const cat = product.carton || {};
+        if (Number(carton.weight) !== Number(cat.weight)) {
+          params.set("weight", carton.weight);
+        }
+        if (
+          Number(carton.innersPerCarton || 0) !==
+          Number(product.innersPerCarton || 0)
+        ) {
+          params.set("inners", carton.innersPerCarton || 0);
+        }
+      }
     }
 
     // Add pallet - either preset slug or custom dimensions
@@ -131,6 +182,26 @@ window.CartonApp.Utils = {
       : window.location.pathname;
 
     window.history.replaceState({}, "", newUrl);
+  },
+
+  // Human-readable age of an ISO timestamp, for catalogue freshness.
+  // Returns null for anything unparseable rather than guessing.
+  relativeAge: function (iso) {
+    if (!iso) return null;
+    const then = Date.parse(iso);
+    if (isNaN(then)) return null;
+    const mins = Math.floor((Date.now() - then) / 60000);
+    if (mins < 0) return { text: "just now", hours: 0 };
+    const hours = Math.floor(mins / 60);
+    const days = Math.floor(hours / 24);
+    let text;
+    if (mins < 2) text = "just now";
+    else if (mins < 60) text = `${mins} minutes ago`;
+    else if (hours < 2) text = "an hour ago";
+    else if (hours < 24) text = `${hours} hours ago`;
+    else if (days < 2) text = "yesterday";
+    else text = `${days} days ago`;
+    return { text, hours };
   },
 
   // Convert preset label to URL-friendly slug

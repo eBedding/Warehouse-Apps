@@ -20,12 +20,20 @@ window.CartonApp.MainApp = function () {
   // -------------------------------------------------
   // Initialize state from URL params or defaults
   // -------------------------------------------------
+  // Parsed once — the sku is resolved later, when the catalogue has loaded
+  const urlInit = React.useRef(parseUrlParams());
+
   const getInitialState = () => {
-    const urlParams = parseUrlParams();
+    const urlParams = urlInit.current;
 
     const cartonInit = urlParams.carton
       ? { ...DEFAULT_VALUES.carton, ...urlParams.carton }
       : { ...DEFAULT_VALUES.carton, weight: 10.0 };
+
+    if (urlParams.weight != null) cartonInit.weight = urlParams.weight;
+    if (urlParams.innersPerCarton != null) {
+      cartonInit.innersPerCarton = urlParams.innersPerCarton;
+    }
 
     const limitsInit = urlParams.pallet
       ? {
@@ -47,13 +55,99 @@ window.CartonApp.MainApp = function () {
   const [carton, setCarton] = useState(cartonInit);
   const [limits, setLimits] = useState(limitsInit);
   const [allowVerticalFlip, setAllowVerticalFlip] = useState(true);
+  // SKU of the catalogue product whose dimensions were loaded, if any.
+  // Dimensions stay editable after selection, so this records provenance only.
+  const [selectedSku, setSelectedSku] = useState(null);
+
+  // -------------------------------------------------
+  // PRODUCT CATALOGUE
+  // Owned here because two features consume it: the picker and the bulk import.
+  // -------------------------------------------------
+  const Products = window.CartonApp.Products;
+  const [products, setProducts] = useState([]);
+  const [catalogueState, setCatalogueState] = useState("loading"); // loading | ready | error
+  const [catalogueSource, setCatalogueSource] = useState(null);
+  const [catalogueGenerated, setCatalogueGenerated] = useState(null);
+  const [urlSkuMissing, setUrlSkuMissing] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Products.load()
+      .then((list) => {
+        if (cancelled) return;
+        setProducts(list);
+        setCatalogueSource(Products.meta().source);
+        setCatalogueGenerated(Products.meta().generated);
+        setCatalogueState("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setCatalogueState("error");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Resolve ?sku= once the catalogue is available. Explicit dimension params
+  // win over the catalogue values, so an adjusted link reproduces faithfully.
+  const urlSkuApplied = React.useRef(false);
+  useEffect(() => {
+    if (urlSkuApplied.current || catalogueState !== "ready") return;
+    const wanted = urlInit.current.sku;
+    if (!wanted) {
+      urlSkuApplied.current = true;
+      return;
+    }
+    urlSkuApplied.current = true;
+
+    const product = Products.findBySku(products, wanted);
+    if (!product) {
+      setUrlSkuMissing(wanted);
+      return;
+    }
+
+    const u = urlInit.current;
+    setCarton({
+      ...Products.toCarton(product),
+      ...(u.carton || {}),
+      ...(u.weight != null ? { weight: u.weight } : {}),
+      ...(u.innersPerCarton != null ? { innersPerCarton: u.innersPerCarton } : {}),
+    });
+    setSelectedSku(product.sku);
+  }, [catalogueState, products]);
+
+  const selectedProduct = useMemo(
+    () => Products.findBySku(products, selectedSku),
+    [products, selectedSku]
+  );
+
+  const handleProductSelect = (product) => {
+    setCarton({ ...carton, ...Products.toCarton(product) });
+    setSelectedSku(product.sku);
+    setUrlSkuMissing(null);
+  };
+
+  // Clearing drops the product link but keeps the dimensions on screen —
+  // wiping the fields would throw away work the user may still want.
+  const handleProductClear = () => setSelectedSku(null);
 
   // -------------------------------------------------
   // Update URL when carton or limits change
   // -------------------------------------------------
   useEffect(() => {
-    updateUrlParams(carton, limits);
-  }, [carton.l, carton.w, carton.h, limits.palletL, limits.palletW, limits.palletH]);
+    updateUrlParams(carton, limits, selectedSku, selectedProduct);
+  }, [
+    carton.l,
+    carton.w,
+    carton.h,
+    carton.weight,
+    carton.innersPerCarton,
+    limits.palletL,
+    limits.palletW,
+    limits.palletH,
+    selectedSku,
+    selectedProduct,
+  ]);
 
   // -------------------------------------------------
   // COMPUTATIONS
@@ -139,6 +233,7 @@ window.CartonApp.MainApp = function () {
         };
 
         const sample = rows[0];
+        const colSku = findCol(sample, "sku", "product code", "item code");
         const colCartonL = findCol(sample, "carton length", "carton l");
         const colCartonW = findCol(sample, "carton width", "carton w");
         const colCartonH = findCol(sample, "carton height", "carton h");
@@ -163,6 +258,15 @@ window.CartonApp.MainApp = function () {
         };
         const resolvedPalletH = findPalletHeight();
 
+        // Distinguish "catalogue unavailable" from "SKU genuinely absent" —
+        // otherwise every row would report NOT FOUND and misplace the blame.
+        if (colSku && !products.length) {
+          alert(
+            "The product catalogue has not loaded, so SKU lookups cannot run.\n\n" +
+            "Rows will use the dimensions given in the sheet, or defaults where blank."
+          );
+        }
+
         // Parse a numeric cell, stripping units like "mm", "kg", "%" etc.
         const parseNum = (val) => {
           if (val === "" || val === null || val === undefined) return NaN;
@@ -179,11 +283,33 @@ window.CartonApp.MainApp = function () {
 
         // Process each row using bestTile algorithm
         for (const row of rows) {
-          const cL = (parseNum(row[colCartonL]) || defaults.carton.l / toMm) * toMm;
-          const cW = (parseNum(row[colCartonW]) || defaults.carton.w / toMm) * toMm;
-          const cH = (parseNum(row[colCartonH]) || defaults.carton.h / toMm) * toMm;
-          const weight = colWeight ? (parseNum(row[colWeight]) || defaults.carton.weight) : defaults.carton.weight;
-          const inners = colInners ? (parseNum(row[colInners]) || 0) : 0;
+          // A SKU supplies the baseline carton spec; any explicit dimension
+          // column in the sheet still overrides it, so a row can quote a
+          // product and then adjust one figure.
+          const skuRaw = colSku ? String(row[colSku] ?? "").trim() : "";
+          const resolved = skuRaw
+            ? Products.resolveSku(products, skuRaw)
+            : { product: null, status: "" };
+          const product = resolved.product;
+          const skuStatus = resolved.status;
+
+          // Catalogue dimensions are always mm; the /toMm here cancels the
+          // *toMm below so they are not scaled a second time in cm mode.
+          const base = product
+            ? Products.toCarton(product)
+            : {
+                l: defaults.carton.l,
+                w: defaults.carton.w,
+                h: defaults.carton.h,
+                weight: defaults.carton.weight,
+                innersPerCarton: 0,
+              };
+
+          const cL = (parseNum(row[colCartonL]) || base.l / toMm) * toMm;
+          const cW = (parseNum(row[colCartonW]) || base.w / toMm) * toMm;
+          const cH = (parseNum(row[colCartonH]) || base.h / toMm) * toMm;
+          const weight = colWeight ? (parseNum(row[colWeight]) || base.weight) : base.weight;
+          const inners = colInners ? (parseNum(row[colInners]) || base.innersPerCarton) : base.innersPerCarton;
 
           const flipRaw = colFlip ? String(row[colFlip]).trim().toLowerCase() : "";
           const flip = flipRaw === "" || flipRaw === "yes" || flipRaw === "y" || flipRaw === "true" || flipRaw === "1";
@@ -214,6 +340,13 @@ window.CartonApp.MainApp = function () {
           const toDisplay = (mm) => bulkUnit === "cm" ? Math.round(mm / 10 * 100) / 100 : mm;
 
           results.push({
+            ...(colSku
+              ? {
+                  SKU: product ? product.sku : skuRaw,
+                  "Product Name": product ? product.name : "",
+                  "SKU Status": skuStatus,
+                }
+              : {}),
             [`Carton Length (${unitLabel})`]: toDisplay(cL),
             [`Carton Width (${unitLabel})`]: toDisplay(cW),
             [`Carton Height (${unitLabel})`]: toDisplay(cH),
@@ -235,6 +368,33 @@ window.CartonApp.MainApp = function () {
             "Carton Overweight": overweightCarton ? "YES" : "",
             "Pallet Overweight": overweightPallet ? "YES" : "",
           });
+        }
+
+        // Unresolved SKUs fall back to defaults, which would otherwise look
+        // like real figures in the output — say so before the download.
+        const unresolved = results.filter(
+          (r) => r["SKU Status"] === "NOT FOUND" || r["SKU Status"] === "AMBIGUOUS"
+        );
+        const coerced = results.filter(
+          (r) => r["SKU Status"] === "MATCHED — CHECK CELL FORMAT"
+        );
+        if (unresolved.length || coerced.length) {
+          const notes = [];
+          if (unresolved.length) {
+            notes.push(
+              `${unresolved.length} of ${results.length} row(s) could not be matched to a product. ` +
+              `Those rows used default dimensions — see the SKU Status column.`
+            );
+          }
+          if (coerced.length) {
+            notes.push(
+              `${coerced.length} row(s) matched only after treating the SKU as a number. ` +
+              `Excel likely reformatted the cell (dropping leading zeros, or turning ` +
+              `something like 5642E10 into 56420000000000). Format the SKU column as ` +
+              `Text in your sheet to avoid this.`
+            );
+          }
+          alert(notes.join("\n\n"));
         }
 
         // Generate and download the results as xlsx
@@ -259,13 +419,16 @@ window.CartonApp.MainApp = function () {
   function handleDownloadTemplate() {
     const u = bulkUnit === "cm" ? "cm" : "mm";
     const d = bulkUnit === "cm" ? 10 : 1; // divisor from mm defaults
+    const sampleSku = (products[0] && products[0].sku) || "";
     const templateData = [
+      // Row 1: SKU only — dimensions come from the catalogue
       {
-        [`Carton Length (${u})`]: 600 / d,
-        [`Carton Width (${u})`]: 400 / d,
-        [`Carton Height (${u})`]: 300 / d,
-        "Weight (kg)": 10,
-        "Inners": 0,
+        "SKU": sampleSku,
+        [`Carton Length (${u})`]: "",
+        [`Carton Width (${u})`]: "",
+        [`Carton Height (${u})`]: "",
+        "Weight (kg)": "",
+        "Inners": "",
         "Allow laying on side": "Yes",
         [`Pallet Length (${u})`]: 1200 / d,
         [`Pallet Width (${u})`]: 1000 / d,
@@ -273,11 +436,28 @@ window.CartonApp.MainApp = function () {
         "Max Carton gross (kg)": 25,
         "Max Pallet Gross (kg)": 1600,
       },
+      // Row 2: SKU with an override — the stated height wins
       {
-        [`Carton Length (${u})`]: 400 / d,
+        "SKU": sampleSku,
+        [`Carton Length (${u})`]: "",
+        [`Carton Width (${u})`]: "",
+        [`Carton Height (${u})`]: 400 / d,
+        "Weight (kg)": "",
+        "Inners": "",
+        "Allow laying on side": "Yes",
+        [`Pallet Length (${u})`]: 1200 / d,
+        [`Pallet Width (${u})`]: 1000 / d,
+        [`Height (${u})`]: 1200 / d,
+        "Max Carton gross (kg)": 25,
+        "Max Pallet Gross (kg)": 1600,
+      },
+      // Row 3: no SKU — fully manual, as before
+      {
+        "SKU": "",
+        [`Carton Length (${u})`]: 600 / d,
         [`Carton Width (${u})`]: 400 / d,
         [`Carton Height (${u})`]: 300 / d,
-        "Weight (kg)": 8,
+        "Weight (kg)": 10,
         "Inners": 0,
         "Allow laying on side": "Yes",
         [`Pallet Length (${u})`]: 1200 / d,
@@ -391,6 +571,20 @@ window.CartonApp.MainApp = function () {
             { className: "font-semibold mb-2" },
             "Carton (external)"
           ),
+
+          // Product picker — fills the fields below; they remain editable
+          React.createElement(window.CartonApp.Components.ProductSelector, {
+            products,
+            catalogueState,
+            catalogueSource,
+            catalogueGenerated,
+            selectedSku,
+            carton,
+            onSelect: handleProductSelect,
+            onClear: handleProductClear,
+            missingSku: urlSkuMissing,
+          }),
+
           ...[
             ["l", "Length (mm)", carton.l],
             ["w", "Width (mm)", carton.w],
@@ -479,6 +673,13 @@ window.CartonApp.MainApp = function () {
             "p",
             { className: "text-xs text-gray-600" },
             "Upload an Excel or CSV file with multiple carton/pallet configurations. The system will run the algorithm on each row and return the results as a downloadable spreadsheet."
+          ),
+          React.createElement(
+            "p",
+            { className: "text-xs text-gray-600" },
+            "Include a ",
+            React.createElement("b", {}, "SKU"),
+            " column to pull carton dimensions from the product catalogue. Any dimension column you fill in overrides the catalogue value for that row."
           ),
           // Unit toggle (mm / cm)
           React.createElement(

@@ -37,21 +37,33 @@
   <!-- Global namespace -->
   <script>
     window.CartonApp = {};
+    window.CartonApp._buildVersion = Date.now();
   </script>
 
-  <!-- Core JS (no JSX → no Babel) -->
-  <script src="./js/constants.js"></script>
-  <script src="./js/utils.js"></script>
-  <script src="./js/algorithms.js"></script>
-  <script src="./js/three-utils.js"></script>
-
-  <!-- Components (React.createElement style → no JSX needed unless explicitly used) -->
-  <script src="./js/components/UIComponents.js"></script>
-  <script src="./js/components/LayerGrid2D.js"></script>
-  <script src="./js/components/PalletView3D.js"></script>
-  <script src="./js/components/ReportProblem.js"></script>
+  <!-- Core JS + components (no JSX → no Babel) -->
+  <script>
+    // Cache-busting: append build version to local script URLs
+    const v = window.CartonApp._buildVersion;
+    const scripts = [
+      { src: "./js/constants.js" },
+      { src: "./js/utils.js" },
+      { src: "./js/algorithms.js" },
+      { src: "./js/products.js" },
+      { src: "./js/three-utils.js" },
+      { src: "./js/components/UIComponents.js" },
+      { src: "./js/components/ProductSelector.js" },
+      { src: "./js/components/LayerGrid2D.js" },
+      { src: "./js/components/PalletView3D.js" },
+      { src: "./js/components/ReportProblem.js" },
+    ];
+    scripts.forEach(s => {
+      document.write(`<script src="${s.src}?v=${v}"><\/script>`);
+    });
+  </script>
 
   <!-- Main app (may contain JSX or Babel-transformed logic) -->
-  <script type="text/babel" src="./js/app.js"></script>
+  <script>
+    document.write(`<script type="text/babel" src="./js/app.js?v=${window.CartonApp._buildVersion}"><\/script>`);
+  </script>
 </body>
 </html>

@@ -3,3 +3,6 @@ index-old.html
 .vscode/settings.json
 containers/sear.js
 containers/searates.md
+api/config.php
+data/products.json
+.env
