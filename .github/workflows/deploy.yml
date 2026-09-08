@@ -25,7 +25,9 @@ jobs:
           rsync -avz --delete \
             --exclude='.git*' \
             --exclude='.github' \
+            --exclude='.env' \
             --exclude='api/config.php' \
+            --exclude='data/' \
             ./ \
             ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:/var/www/carton-planner
 
@@ -37,6 +39,39 @@ jobs:
           define('MAILGUN_DOMAIN', 'mg.e-bedding.co.uk');
           define('MAILGUN_TO_EMAIL', 'stephen.collins@comfygroup.co.uk');
           EOFCONFIG"
+
+      - name: 🔑 Write Plytix credentials
+        run: |
+          # The heredoc delimiter is quoted, so the runner's shell expands
+          # nothing: a key containing $ or backticks reaches the server intact
+          # rather than being mangled (or executed) on the way.
+          ssh -i ~/.ssh/id_rsa ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} \
+            'umask 077 && cat > /var/www/.env && chmod 600 /var/www/.env' <<'EOFENV'
+          PLYTIX_API_KEY=${{ secrets.PLYTIX_API_KEY }}
+          PLYTIX_API_PASSWORD=${{ secrets.PLYTIX_API_PASSWORD }}
+          EOFENV
+
+      - name: ⏰ Install cron schedule
+        run: |
+          ssh -i ~/.ssh/id_rsa ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} '
+            set -e
+            install -o root -g root -m 0644 \
+              /var/www/carton-planner/deploy/cron/plytix-export \
+              /etc/cron.d/plytix-export
+            echo "--- /etc/cron.d/plytix-export ---"
+            tail -1 /etc/cron.d/plytix-export
+            command -v /usr/bin/php >/dev/null \
+              || echo "WARNING: /usr/bin/php not found — fix the path in deploy/cron/plytix-export"
+          '
+
+      - name: 🗂️ Build product catalogue
+        continue-on-error: true
+        run: |
+          # First run populates data/products.json immediately rather than
+          # leaving the picker empty until the next scheduled run. Deliberately
+          # non-fatal: a Plytix outage should not fail a deploy.
+          ssh -i ~/.ssh/id_rsa ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} \
+            "/usr/bin/php /var/www/carton-planner/api/export-products.php"
 
       - name: 🔄 Restart Nginx
         run: |

@@ -1,0 +1,19 @@
+# Plytix product catalogue export for the pallet planner.
+#
+# Installed to /etc/cron.d/plytix-export by .github/workflows/deploy.yml, so the
+# schedule is version-controlled here rather than edited on the server.
+#
+# Two things differ from a user crontab and both fail silently if got wrong:
+#   1. /etc/cron.d entries need a user field (the "root" below).
+#   2. The file must end with a newline, or cron ignores the last line.
+# The installed filename also must not contain a dot, or cron skips the file.
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The script emails its own failures via Mailgun, so cron's mail is not needed.
+MAILTO=""
+
+# Daily at 06:00. Credentials are read from /var/www/.env by the script itself,
+# because cron does not inherit a login shell's environment.
+0 6 * * * root /usr/bin/php /var/www/carton-planner/api/export-products.php >> /var/log/plytix-export.log 2>&1
