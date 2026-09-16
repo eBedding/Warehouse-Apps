@@ -11,6 +11,7 @@ window.CartonApp.Components.ReportProblem = function () {
   const [email, setEmail] = useState("");
   const [description, setDescription] = useState("");
   const [challenge, setChallenge] = useState("");
+  const [honeypot, setHoneypot] = useState("");
   const [status, setStatus] = useState(null); // 'sending' | 'success' | 'error' | 'rate-limited'
   const [errorMsg, setErrorMsg] = useState("");
   const dropdownRef = useRef(null);
@@ -88,6 +89,7 @@ window.CartonApp.Components.ReportProblem = function () {
           description,
           url: window.location.href,
           challenge,
+          website: honeypot,
         }),
       });
 
@@ -195,6 +197,26 @@ window.CartonApp.Components.ReportProblem = function () {
               { className: "block text-xs font-medium text-gray-600 mb-1" },
               "Your email"
             ),
+                      // Honeypot — hidden from people, filled in by naive bots. Kept out of
+          // the tab order and hidden from screen readers so it is never reached
+          // by a real user; autocomplete off so password managers leave it be.
+          React.createElement("input", {
+            type: "text",
+            name: "website",
+            value: honeypot,
+            onChange: (e) => setHoneypot(e.target.value),
+            tabIndex: -1,
+            autoComplete: "off",
+            "aria-hidden": "true",
+            style: {
+              position: "absolute",
+              left: "-9999px",
+              width: "1px",
+              height: "1px",
+              opacity: 0,
+            },
+          }),
+
             React.createElement("input", {
               type: "email",
               value: email,

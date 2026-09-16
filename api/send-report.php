@@ -7,7 +7,9 @@ header('Content-Type: application/json');
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: DENY');
 
-// Restrict CORS to your domain only (change * to your actual domain)
+// CORS. This is NOT access control: it only stops other websites calling this
+// endpoint from a visitor's browser. Any script or curl request ignores it
+// entirely, so the rate limiting and validation below are the real defences.
 $allowedOrigins = [
     'https://tools.e-bedding.co.uk',
     'http://localhost:3000', // for local dev
@@ -32,23 +34,61 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     exit;
 }
 
-// Server-side rate limiting (per IP, 5 requests per hour)
+// -----------------------------------------------------------------------------
+// Rate limiting, per IP, over a one hour window.
+//
+// Two separate ceilings. Successes are what reach the inbox, so they stay
+// tightly capped. Attempts are counted as well — and counted BEFORE any
+// validation runs — because otherwise a request that fails validation costs
+// the sender nothing and can be repeated forever.
+//
+// NOTE: this keys on REMOTE_ADDR, which is the real client only because nginx
+// talks to PHP directly. Behind a proxy or CDN every request would arrive with
+// the proxy's address and this would silently become a single global counter.
+// -----------------------------------------------------------------------------
 $rateLimitFile = sys_get_temp_dir() . '/report_ratelimit_' . md5($_SERVER['REMOTE_ADDR'] ?? 'unknown') . '.json';
-$rateLimit = 5;
-$rateWindow = 3600; // 1 hour
+$maxSuccesses = 5;    // emails actually sent
+$maxAttempts  = 30;   // requests of any kind, valid or not
+$rateWindow = 3600;   // 1 hour
 $now = time();
 
-$requests = [];
+$state = [];
 if (file_exists($rateLimitFile)) {
-    $requests = json_decode(file_get_contents($rateLimitFile), true) ?: [];
-    $requests = array_filter($requests, fn($ts) => ($now - $ts) < $rateWindow);
+    $state = json_decode(file_get_contents($rateLimitFile), true) ?: [];
+}
+// Files written by the previous version are a flat list of successes
+if ($state && array_is_list($state)) {
+    $state = ['ok' => $state, 'attempts' => []];
 }
 
-if (count($requests) >= $rateLimit) {
+$recent = fn($list) => array_values(array_filter(
+    is_array($list) ? $list : [],
+    fn($ts) => is_numeric($ts) && ($now - $ts) < $rateWindow
+));
+$successes = $recent($state['ok'] ?? []);
+$attempts  = $recent($state['attempts'] ?? []);
+
+$saveState = function () use (&$successes, &$attempts, $rateLimitFile) {
+    file_put_contents(
+        $rateLimitFile,
+        json_encode(['ok' => array_values($successes), 'attempts' => array_values($attempts)]),
+        LOCK_EX
+    );
+};
+
+if (count($attempts) >= $maxAttempts || count($successes) >= $maxSuccesses) {
+    // Record the rejection too, so hammering a limited address keeps extending
+    // the window rather than being free once the ceiling is reached.
+    $attempts[] = $now;
+    $saveState();
     http_response_code(429);
     echo json_encode(['error' => 'Too many requests. Please try again later.']);
     exit;
 }
+
+// Counted now, before validation, so invalid requests are not free
+$attempts[] = $now;
+$saveState();
 
 // Load config
 $configFile = __DIR__ . '/config.php';
@@ -74,6 +114,18 @@ $description = trim($input['description'] ?? '');
 $url = $input['url'] ?? '';
 $jsonConfig = $input['jsonConfig'] ?? '';
 $source = $input['source'] ?? 'pallets'; // 'pallets' or 'containers'
+
+// Honeypot: a field hidden from people but visible to anything that fills in
+// every input it finds. A real submission always leaves this empty.
+//
+// Answer as though it succeeded. Telling a bot it was caught just teaches it
+// which field to skip next time, and there is no person here to inform.
+$honeypot = trim((string) ($input['website'] ?? ''));
+if ($honeypot !== '') {
+    error_log('send-report: honeypot triggered from ' . ($_SERVER['REMOTE_ADDR'] ?? 'unknown'));
+    echo json_encode(['success' => true, 'message' => 'Report sent successfully']);
+    exit;
+}
 $challenge = strtoupper(preg_replace('/\s+/', '', $input['challenge'] ?? ''));
 
 // Sanitize description (limit length, strip dangerous content)
@@ -103,9 +155,6 @@ if ($challenge !== 'SK91AX') {
     exit;
 }
 
-// Record this request for rate limiting
-$requests[] = $now;
-file_put_contents($rateLimitFile, json_encode($requests));
 
 // Determine tool name based on source
 $toolName = ($source === 'containers') ? 'Container Tool' : 'Pallet Tool';
@@ -163,6 +212,11 @@ if ($curlError) {
 }
 
 if ($httpCode >= 200 && $httpCode < 300) {
+    // Counted only once the mail is actually away. A failed send already cost
+    // an attempt, so there is no abuse gap — but a Mailgun outage should not
+    // burn someone's quota for a report that never arrived.
+    $successes[] = $now;
+    $saveState();
     echo json_encode(['success' => true, 'message' => 'Report sent successfully']);
 } else {
     error_log("Mailgun HTTP error: " . $httpCode . " - " . $response); // Log for debugging

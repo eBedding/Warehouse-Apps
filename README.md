@@ -125,6 +125,23 @@ whenever the n8n password changes.
 > security* — its job is to deter drive-by bots, not a determined attacker. For stronger
 > gating, restrict the form to an internal network/VPN or front it with SSO.
 
-A hidden honeypot field in the form (a field real users never fill in, rejected server-side
-if populated) is a cheap extra bot deterrent.
+### Problem report form (`api/send-report.php`)
+
+The only web-facing endpoint. It is deliberately open — the point is that anyone hitting a
+problem can report it — so abuse is limited rather than prevented:
+
+- **Rate limiting** per IP over a one hour window: 5 emails, and 30 requests of any kind.
+  Attempts are counted *before* validation, so invalid requests are not free.
+- **Honeypot**: a hidden `website` field that real users never fill in. When populated the
+  response is a normal success, because telling a bot it was caught only teaches it which
+  field to skip.
+- **Fixed recipient**: the `to` address comes from config, never the request, so the
+  endpoint cannot be used to send mail to anyone else.
+
+Note that the challenge question (`SK91AX`) is in public client-side JavaScript and in this
+public repository, so it deters casual form-spam crawlers only — it is not a bot test that a
+determined sender has to solve.
+
+The CORS allowlist in that file is **not** access control. It only stops other websites
+calling the endpoint from a visitor's browser; scripts and `curl` ignore it entirely.
 
